@@ -6,6 +6,10 @@ Nemesis (déesse grecque de l'équilibre et de la justice rétributive) rétabli
 
 ![Vue principale](docs/screenshots/01-main.png)
 
+> **Plateforme : Linux only.** Développé et testé sur **Ubuntu 26.04 LTS**, avec Ollama et toutes les dépendances (Chromaprint, ffmpeg, faster-whisper, Essentia) installées localement. Non testé sur macOS/Windows — voir [Compatibilité](#compatibilité-macoswindows) pour le détail de ce qui casserait et pourquoi.
+>
+> Outil taillé sur mesure pour un seul setup (le mien) : ma bibliothèque MP3, mon Navidrome, mon Ollama local, mon Ubuntu. Si tu n'es ni moi ni l'une des deux autres personnes sur Terre à avoir exactement ce besoin, attends-toi à devoir bricoler.
+
 ## Pourquoi
 
 Trier des centaines/milliers de MP3 à la main pour trouver les doublons — vrais doublons, quasi-doublons renommés, remixes, ré-encodages — est fastidieux. Nemesis automatise la détection via un **entonnoir progressif** (rapide → lent) et transforme chaque résultat en décision actionnable immédiatement, sans aller-retour entre plusieurs écrans.
@@ -99,6 +103,17 @@ Aide et raccourcis clavier :
 - **Audio** : Chromaprint (`fpcalc`), ffmpeg (trim/fade/waveform), faster-whisper (paroles), Essentia (BPM/tonalité)
 - **Tags ID3** : `node-id3`
 - **LLM** : Ollama local pour auteur fictif + titre depuis paroles
+
+## Compatibilité macOS/Windows
+
+Nemesis est développé et testé exclusivement sur **Ubuntu 26.04 LTS**. Le backend (Node/Express) est en soi multiplateforme, mais deux points cassent ou dégradent la fonctionnalité ailleurs :
+
+- **Navigateur de répertoire — dégrade proprement.** L'auto-détection des clés USB/disques/partages réseau lit directement `/proc/mounts`, qui n'existe que sous Linux. Sur macOS/Windows, cet appel échoue silencieusement (try/catch, juste un `console.error`) et il ne reste que le raccourci "Accueil" — la navigation manuelle par chemin fonctionne toujours, rien ne plante.
+- **BPM/tonalité (Essentia) — probablement indisponible sous Windows.** Essentia ne publie pas de wheel officiel Windows sur PyPI (Linux/macOS uniquement). Sans ce venv, l'étape est simplement ignorée (comme documenté plus bas) — pas de crash, mais pas de BPM/tonalité/tags `TBPM`/`TKEY` non plus.
+- **macOS** : les autres dépendances (Chromaprint, ffmpeg, faster-whisper, Essentia) ont des builds officiels via Homebrew/pip — a priori plus proche de fonctionner nativement, mais non testé.
+- **Windows natif** : non testé, prévoir des frictions (chemins, activation de venv `Scripts\` vs `bin/`, absence de systemd pour le déploiement). **WSL2** est le chemin le plus réaliste pour faire tourner Nemesis sur Windows.
+
+Ollama (LLM pour auteur/titre fictifs) est optionnel sur toutes les plateformes — sans lui, les champs restent éditables manuellement, seul le bouton de génération automatique échoue proprement.
 
 ## Installation
 
