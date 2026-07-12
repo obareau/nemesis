@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import NodeID3 from 'node-id3';
@@ -9,6 +10,11 @@ import Database from 'better-sqlite3';
 
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5:7b';
+
+// Nombre de processus fpcalc lancés en parallèle pendant l'étape empreinte du
+// scan (fpcalc est CPU-bound et indépendant par fichier, donc parallélisable
+// sans risque) — bridable via env sur une machine partagée.
+const FPCALC_CONCURRENCY = Math.max(1, parseInt(process.env.FPCALC_CONCURRENCY, 10) || os.cpus().length);
 
 // Vocabulaire canonique des 17 moods Subwave (doit rester en miroir de
 // SHOW_MOODS dans subwave/controller/src/settings.ts et subwave-autotag.py).
@@ -105,6 +111,19 @@ function runFfmpeg(args) {
       else resolve();
     });
   });
+}
+
+// Exécute `worker` sur chaque item avec au plus `limit` exécutions concurrentes.
+async function runWithConcurrency(items, limit, worker) {
+  let nextIndex = 0;
+  async function runNext() {
+    while (nextIndex < items.length) {
+      const i = nextIndex++;
+      await worker(items[i], i);
+    }
+  }
+  const workerCount = Math.min(limit, items.length);
+  await Promise.all(Array.from({ length: workerCount }, runNext));
 }
 
 // --- Cache fingerprint/paroles ---
@@ -861,10 +880,11 @@ app.post('/api/scan', express.json(), async (req, res) => {
         let fpCacheHits = 0, lyricsCacheHits = 0;
 
         analysisState.currentStage = 'fingerprint';
-        for (let i = 0; i < candidates.length; i++) {
+        let fpDone = 0;
+        // Empreintes calculées avec FPCALC_CONCURRENCY processus fpcalc en parallèle
+        // (CPU-bound, indépendant par fichier) au lieu d'un fichier à la fois.
+        await runWithConcurrency(candidates, FPCALC_CONCURRENCY, async (file) => {
           if (scanGeneration !== myGeneration) return; // projet fermé/rescanné entretemps — on abandonne
-          const file = candidates[i];
-          analysisState.currentFile = `${i + 1}/${candidates.length}`;
 
           const cached = getCachedAnalysis(file);
           if (cached?.fingerprint) {
@@ -878,8 +898,10 @@ app.post('/api/scan', express.json(), async (req, res) => {
               console.error('Fingerprint error:', e.message);
             }
           }
-          analysisState.fileProgress = Math.round(((i + 1) / candidates.length) * 100);
-        }
+          fpDone++;
+          analysisState.currentFile = `${fpDone}/${candidates.length}`;
+          analysisState.fileProgress = Math.round((fpDone / candidates.length) * 100);
+        });
         if (scanGeneration !== myGeneration) return;
         if (fpCacheHits > 0) console.log(`⚖️  Cache fingerprint: ${fpCacheHits}/${candidates.length} réutilisés`);
 

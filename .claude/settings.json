@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc --noEmit)",
+      "Bash(journalctl *)",
+      "Bash(systemctl is-active *)",
+      "Bash(systemctl status *)",
+      "Bash(npm test)",
+      "Bash(systemctl --user status *)",
+      "Bash(systemctl cat *)",
+      "Bash(gh run watch *)",
+      "Bash(systemctl --user list-timers *)",
+      "Bash(systemctl list-units *)",
+      "Bash(systemctl list-timers *)",
+      "Bash(openclaw agents list)",
+      "Bash(systemctl --user is-active *)",
+      "Bash(systemctl list-unit-files *)",
+      "Bash(systemctl show *)",
+      "Bash(claude mcp list)",
+      "Bash(sudo systemctl status *)",
+      "Bash(sudo -n systemctl status *)",
+      "Bash(systemctl is-enabled *)",
+      "Bash(openclaw status *)"
+    ]
+  }
+}
