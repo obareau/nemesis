@@ -1,40 +1,11 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import './App.css';
-
-interface File {
-  path: string;
-  name: string;
-  size: number;
-  mtime: number;
-  fingerprint?: string;
-  lyrics?: string;
-  rating?: number;
-  bpm?: number;
-  key?: string;
-  scale?: string;
-  pushedToNavidrome?: boolean;
-  moods?: string[];
-  playCount?: number;
-}
-
-interface MoodTrack {
-  songId: string;
-  title: string;
-  artist?: string;
-  path: string | null;
-  knownLocally: boolean;
-  rating?: number;
-  bpm?: number;
-}
-
-interface WaveformDiff {
-  totalWidth: number;
-  height: number;
-  a: { image: string; width: number; duration: number };
-  b: { image: string; width: number; duration: number };
-}
-
-type AnalysisMethod = 'size' | 'name' | 'fingerprint' | 'lyrics';
+import * as api from './api';
+import { API, toBase64Url } from './api';
+import type {
+  File, MoodTrack, WaveformDiff, AnalysisMethod, Duplicate,
+  AnalysisState, ActionLogEntry, ProjectSummary, Shortcut, QuarantineItem
+} from './api';
 
 // Miroir de SHOW_MOODS (server.js / subwave settings.ts) — source de vérité réelle
 // récupérée via GET /api/moods au montage ; cette liste ne sert que de fallback.
@@ -69,76 +40,6 @@ const MOOD_COLORS: Record<string, string> = {
 
 function moodColor(mood: string): string {
   return MOOD_COLORS[mood] || '#888';
-}
-
-interface Duplicate {
-  method: AnalysisMethod;
-  files: File[];
-  similarity?: number;
-}
-
-interface SimilarPair {
-  method: AnalysisMethod;
-  similarity: number;
-  fileA: File;
-  fileB: File;
-}
-
-interface AnalysisState {
-  status: 'idle' | 'scanning' | 'completed' | 'error';
-  currentFile: string | null;
-  currentStage: string | null;
-  fileProgress: number;
-  totalProgress: number;
-  files: File[];
-  duplicates: Duplicate[];
-  similarPairs: SimilarPair[];
-  error: string | null;
-  dirPath?: string | null;
-  processedGroups?: string[];
-  actionCount?: number;
-  actionLog?: ActionLogEntry[];
-  resumed?: boolean;
-}
-
-interface ActionLogEntry {
-  id: string;
-  type: string;
-  description: string;
-  timestamp: string;
-}
-
-interface ProjectSummary {
-  dirPath: string;
-  status: 'active' | 'done';
-  updatedAt: string;
-  filesCount: number;
-  duplicatesCount: number;
-  actionCount: number;
-}
-
-interface Shortcut {
-  label: string;
-  group: 'local' | 'removable' | 'network' | 'mount';
-  path: string;
-  detail?: string;
-}
-
-interface QuarantineItem {
-  quarantineName: string;
-  originalPath: string;
-  size: number;
-}
-
-const API = '/api';
-
-// Encode un chemin de fichier en base64url (compatible UTF-8) pour l'URL de streaming —
-// doit rester en miroir de Buffer.from(str, 'utf-8').toString('base64url') côté serveur.
-function toBase64Url(str: string): string {
-  const bytes = new TextEncoder().encode(str);
-  let binary = '';
-  bytes.forEach(b => { binary += String.fromCharCode(b); });
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 // Note en étoiles compacte et cliquable — pour trier vite garder/quarantaine
@@ -325,21 +226,21 @@ function App() {
   const [showHelp, setShowHelp] = useState(false);
 
   useEffect(() => {
-    fetch(`${API}/moods`)
+    api.getMoods()
       .then(res => res.json())
       .then(data => {
         if (Array.isArray(data.moods) && data.moods.length > 0) setAvailableMoods(data.moods);
       })
       .catch(() => { /* garde la liste de secours */ });
 
-    fetch(`${API}/quarantine`)
+    api.getQuarantineItems()
       .then(res => res.json())
       .then(data => setQuarantineItems(data.items || []))
       .catch(() => { /* panneau optionnel */ });
 
     // Recharge l'état d'un scan déjà en cours ou terminé côté serveur — sans ça,
     // tout rafraîchissement de page perd l'affichage alors que le backend a gardé les résultats.
-    fetch(`${API}/status`)
+    api.getStatus()
       .then(res => res.json())
       .then(data => {
         setState(data);
@@ -347,7 +248,7 @@ function App() {
         if (data.projectStatus) setProjectStatus(data.projectStatus);
         // Aucun projet actif en mémoire → propose de reprendre un projet existant ou d'en ouvrir un
         if (!data.dirPath) {
-          fetch(`${API}/projects`)
+          api.getProjects()
             .then(r => r.json())
             .then(pdata => {
               setProjects(pdata.projects || []);
@@ -363,7 +264,7 @@ function App() {
 
   const loadProjects = async () => {
     try {
-      const res = await fetch(`${API}/projects`);
+      const res = await api.getProjects();
       const data = await res.json();
       setProjects(data.projects || []);
     } catch {
@@ -376,11 +277,7 @@ function App() {
   const deleteProject = async (dirPath: string) => {
     setDeletingProject(true);
     try {
-      const res = await fetch(`${API}/projects`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dirPath })
-      });
+      const res = await api.deleteProject(dirPath);
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.error || 'Échec suppression projet');
@@ -404,11 +301,7 @@ function App() {
   const resumeProject = async (dirPath: string, force = false) => {
     setShowProjectPicker(false);
     try {
-      const res = await fetch(`${API}/scan`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dirPath, force })
-      });
+      const res = await api.scan(dirPath, force);
       const data = await res.json();
       setState(data);
       setProjectStatus('active');
@@ -422,11 +315,7 @@ function App() {
   const reopenDoneProject = async (dirPath: string) => {
     setShowProjectPicker(false);
     try {
-      const res = await fetch(`${API}/projects/reopen`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dirPath })
-      });
+      const res = await api.reopenProject(dirPath);
       const data = await res.json();
       setState(data);
       setProjectStatus('active');
@@ -440,7 +329,7 @@ function App() {
   const closeProject = async () => {
     setClosingProject(true);
     try {
-      const res = await fetch(`${API}/projects/close`, { method: 'POST' });
+      const res = await api.closeProject();
       if (!res.ok) throw new Error('Échec clôture projet');
       setProjectStatus('done');
       showTopNotice('✓ Projet marqué comme terminé');
@@ -455,7 +344,7 @@ function App() {
   const handleUndo = async () => {
     setUndoing(true);
     try {
-      const res = await fetch(`${API}/undo`, { method: 'POST' });
+      const res = await api.undo();
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Échec undo');
 
@@ -481,7 +370,7 @@ function App() {
       const steps = log.length - idx;
       let lastData: { undone: ActionLogEntry; status: AnalysisState; processedGroups?: string[] } | null = null;
       for (let i = 0; i < steps; i++) {
-        const res = await fetch(`${API}/undo`, { method: 'POST' });
+        const res = await api.undo();
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Échec undo');
         lastData = data;
@@ -504,7 +393,7 @@ function App() {
 
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`${API}/status`);
+        const res = await api.getStatus();
         const newState = await res.json();
         setState(newState);
       } catch {
@@ -556,7 +445,7 @@ function App() {
     if (!playingFilePath) { setPlayerWaveform(null); return; }
     let cancelled = false;
     setPlayerWaveform(null);
-    fetch(`${API}/waveform/${toBase64Url(playingFilePath)}`)
+    api.getWaveform(playingFilePath)
       .then(res => res.json())
       .then(data => { if (!cancelled && data.image) setPlayerWaveform(data.image); })
       .catch(() => { /* pas de sonogramme dispo — la barre reste utilisable sans */ });
@@ -567,11 +456,7 @@ function App() {
   // pause/reprise) pour repérer d'un coup d'œil les morceaux jamais écoutés.
   useEffect(() => {
     if (!playingFilePath) return;
-    fetch(`${API}/play-count`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filePath: playingFilePath })
-    })
+    api.incrementPlayCount(playingFilePath)
       .then(res => res.json())
       .then(data => {
         if (!data.success) return;
@@ -661,8 +546,8 @@ function App() {
     setDiffView(false);
     setDiffData(null);
     compareWiredRef.current = false;
-    fetch(`${API}/waveform/${toBase64Url(fileA.path)}`).then(r => r.json()).then(d => d.image && setCompareWaveformA(d.image)).catch(() => {});
-    fetch(`${API}/waveform/${toBase64Url(fileB.path)}`).then(r => r.json()).then(d => d.image && setCompareWaveformB(d.image)).catch(() => {});
+    api.getWaveform(fileA.path).then(r => r.json()).then(d => d.image && setCompareWaveformA(d.image)).catch(() => {});
+    api.getWaveform(fileB.path).then(r => r.json()).then(d => d.image && setCompareWaveformB(d.image)).catch(() => {});
   };
 
   // Vue "diff" : sonogrammes des deux fichiers calés sur t=0 à la même échelle px/seconde,
@@ -672,7 +557,7 @@ function App() {
     if (!diffView || !compareFiles) { setDiffData(null); return; }
     const [fileA, fileB] = compareFiles;
     setDiffLoading(true);
-    fetch(`${API}/waveform-diff?pathA=${encodeURIComponent(fileA.path)}&pathB=${encodeURIComponent(fileB.path)}`)
+    api.getWaveformDiff(fileA.path, fileB.path)
       .then(r => r.json())
       .then(d => { if (!d.error) setDiffData(d); })
       .catch(() => {})
@@ -806,7 +691,7 @@ function App() {
     setShowSimilar(false);
     setMoodPanelLoading(true);
     try {
-      const res = await fetch(`${API}/navidrome/mood/${encodeURIComponent(mood)}`);
+      const res = await api.getNavidromeMood(mood);
       const data = await res.json();
       setMoodPanelTracks(Array.isArray(data.tracks) ? data.tracks : []);
     } catch {
@@ -824,11 +709,7 @@ function App() {
   // Étiquetage local (pas d'appel Navidrome) — le push explicite reste un geste séparé
   const tagFilesWithMood = async (filePaths: string[], mood: string, action: 'add' | 'remove' = 'add') => {
     try {
-      const res = await fetch(`${API}/tag-mood`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filePaths, mood, action })
-      });
+      const res = await api.tagMood(filePaths, mood, action);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Échec tag mood');
 
@@ -883,11 +764,7 @@ function App() {
 
     if (painterRenameEnabled && authorName.trim()) {
       try {
-        const res = await fetch(`${API}/rename-bulk`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filePaths: [filePath], author: authorName.trim(), title: titleName.trim(), moods: [] })
-        });
+        const res = await api.renameBulk([filePath], authorName.trim(), titleName.trim(), []);
         const data = await res.json();
         const result = data.results?.[0];
         if (res.ok && result?.success) {
@@ -916,11 +793,7 @@ function App() {
         .map(f => f.name);
       const moodLabel = Array.from(selectedMoods).join(', ');
 
-      const res = await fetch(`${API}/generate-author`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ trackNames, mood: moodLabel })
-      });
+      const res = await api.generateAuthor(trackNames, moodLabel);
       const data = await res.json();
 
       if (!res.ok) throw new Error(data.error || 'Échec génération');
@@ -941,11 +814,7 @@ function App() {
         throw new Error('Aucun fichier sélectionné n\'a de paroles transcrites (lance l\'étape "Paroles" d\'abord)');
       }
 
-      const res = await fetch(`${API}/generate-title`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lyrics: withLyrics.lyrics })
-      });
+      const res = await api.generateTitle(withLyrics.lyrics!);
       const data = await res.json();
 
       if (!res.ok) throw new Error(data.error || 'Échec génération');
@@ -972,16 +841,7 @@ function App() {
     try {
       const moodsArray = Array.from(selectedMoods);
 
-      const res = await fetch(`${API}/rename-bulk`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          filePaths: Array.from(selectedFiles),
-          author: authorName.trim(),
-          title: titleName.trim(),
-          moods: moodsArray
-        })
-      });
+      const res = await api.renameBulk(Array.from(selectedFiles), authorName.trim(), titleName.trim(), moodsArray);
       const data = await res.json();
 
       if (!res.ok) throw new Error(data.error || 'Échec renommage');
@@ -992,11 +852,7 @@ function App() {
       if (pushToNavidrome && newPaths.length > 0 && moodsArray.length > 0) {
         setPushingNavidrome(true);
         try {
-          const pushRes = await fetch(`${API}/navidrome/push`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ filePaths: newPaths, moods: moodsArray })
-          });
+          const pushRes = await api.navidromePush(newPaths, moodsArray);
           const pushData = await pushRes.json();
           if (!pushRes.ok) throw new Error(pushData.error || 'Échec push Navidrome');
 
@@ -1017,7 +873,7 @@ function App() {
       setTitleName('');
 
       // Rafraîchit l'état local avec les nouveaux chemins/noms
-      const statusRes = await fetch(`${API}/status`);
+      const statusRes = await api.getStatus();
       const newState = await statusRes.json();
       setState(newState);
       if (Array.isArray(newState.processedGroups)) setProcessedGroups(new Set(newState.processedGroups));
@@ -1124,14 +980,7 @@ function App() {
     if (!workingGroup) return;
     setGeneratingAuthor(true);
     try {
-      const res = await fetch(`${API}/generate-author`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          trackNames: workingGroup.files.map(f => f.name),
-          mood: Array.from(groupMoods).join(', ')
-        })
-      });
+      const res = await api.generateAuthor(workingGroup.files.map(f => f.name), Array.from(groupMoods).join(', '));
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Échec génération');
       setGroupAuthor(data.author);
@@ -1150,11 +999,7 @@ function App() {
       if (!withLyrics) {
         throw new Error('Aucune parole transcrite pour ce groupe (l\'étape "Paroles" doit être terminée)');
       }
-      const res = await fetch(`${API}/generate-title`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lyrics: withLyrics.lyrics })
-      });
+      const res = await api.generateTitle(withLyrics.lyrics!);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Échec génération');
       setGroupTitle(data.title);
@@ -1191,11 +1036,7 @@ function App() {
 
       // 1. Quarantaine des fichiers écartés
       if (groupQuarantine && discarded.length > 0) {
-        const res = await fetch(`${API}/quarantine`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filePaths: discarded.map(f => f.path) })
-        });
+        const res = await api.quarantine(discarded.map(f => f.path));
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Échec quarantaine');
         report.push(`${data.quarantined} écarté(s)`);
@@ -1203,16 +1044,7 @@ function App() {
 
       // 2. Renommage + tag des fichiers gardés
       if (groupRename && groupAuthor.trim()) {
-        const res = await fetch(`${API}/rename-bulk`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            filePaths: keptPaths,
-            author: groupAuthor.trim(),
-            title: groupTitle.trim(),
-            moods: Array.from(groupMoods)
-          })
-        });
+        const res = await api.renameBulk(keptPaths, groupAuthor.trim(), groupTitle.trim(), Array.from(groupMoods));
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Échec renommage');
         report.push(`${data.renamed} renommé(s)`);
@@ -1224,11 +1056,7 @@ function App() {
 
       // 3. Envoi vers Navidrome (playlists mood, détection déjà-présent → Covers)
       if (groupNavidrome && keptPaths.length > 0) {
-        const res = await fetch(`${API}/navidrome/push`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filePaths: keptPaths, moods: Array.from(groupMoods) })
-        });
+        const res = await api.navidromePush(keptPaths, Array.from(groupMoods));
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Échec push Navidrome');
         const covered = data.results.filter((r: { alreadyInLibrary?: boolean }) => r.alreadyInLibrary).length;
@@ -1236,16 +1064,12 @@ function App() {
       }
 
       // Marque le groupe traité (persisté côté serveur) et ferme
-      await fetch(`${API}/groups/skip`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ method: workingGroup.method, filePaths: workingGroup.files.map(f => f.path) })
-      });
+      await api.skipGroup(workingGroup.method, workingGroup.files.map(f => f.path));
       setProcessedGroups(prev => new Set(prev).add(groupSignature(workingGroup)));
       setWorkingGroup(null);
       setRenameNotice(`✓ Groupe traité — ${report.join(' · ') || 'aucune action'}`);
 
-      const statusRes = await fetch(`${API}/status`);
+      const statusRes = await api.getStatus();
       const newState = await statusRes.json();
       setState(newState);
       if (Array.isArray(newState.processedGroups)) setProcessedGroups(new Set(newState.processedGroups));
@@ -1260,11 +1084,7 @@ function App() {
   const skipGroup = async () => {
     if (!workingGroup) return;
     try {
-      await fetch(`${API}/groups/skip`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ method: workingGroup.method, filePaths: workingGroup.files.map(f => f.path) })
-      });
+      await api.skipGroup(workingGroup.method, workingGroup.files.map(f => f.path));
     } catch {
       // le groupe restera visible si l'appel échoue — pas bloquant
     }
@@ -1274,7 +1094,7 @@ function App() {
 
   const loadQuarantineCount = async () => {
     try {
-      const res = await fetch(`${API}/quarantine`);
+      const res = await api.getQuarantineItems();
       const data = await res.json();
       setQuarantineItems(data.items || []);
     } catch {
@@ -1288,11 +1108,7 @@ function App() {
     if (filePaths.length === 0) return;
     setRenameNotice(null);
     try {
-      const res = await fetch(`${API}/quarantine`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filePaths })
-      });
+      const res = await api.quarantine(filePaths);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Échec mise en quarantaine');
 
@@ -1303,7 +1119,7 @@ function App() {
         return next;
       });
 
-      const statusRes = await fetch(`${API}/status`);
+      const statusRes = await api.getStatus();
       const newState = await statusRes.json();
       setState(newState);
       if (Array.isArray(newState.processedGroups)) setProcessedGroups(new Set(newState.processedGroups));
@@ -1337,11 +1153,7 @@ function App() {
     }
 
     try {
-      await fetch(`${API}/rating`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filePath, rating })
-      });
+      await api.rating(filePath, rating);
     } catch {
       // note perdue en cas de coupure réseau — pas bloquant, pas critique
     }
@@ -1351,11 +1163,7 @@ function App() {
   const analyzeAudio = async (filePath: string) => {
     setAnalyzingPaths(prev => new Set(prev).add(filePath));
     try {
-      const res = await fetch(`${API}/analyze-audio`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filePath })
-      });
+      const res = await api.analyzeAudio(filePath);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Échec analyse');
 
@@ -1388,11 +1196,7 @@ function App() {
   const rescanLyrics = async (filePath: string, startOffset = 30) => {
     setRescanningLyricsPaths(prev => new Set(prev).add(filePath));
     try {
-      const res = await fetch(`${API}/lyrics-rescan`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filePath, startOffset })
-      });
+      const res = await api.lyricsRescan(filePath, startOffset);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Échec transcription');
 
@@ -1438,11 +1242,7 @@ function App() {
 
     setRenamingBusy(true);
     try {
-      const res = await fetch(`${API}/rename-file`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filePath, newName })
-      });
+      const res = await api.renameFile(filePath, newName);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Échec renommage');
 
@@ -1501,7 +1301,7 @@ function App() {
     setFadeOut(0);
     setWaveformLoading(true);
     try {
-      const res = await fetch(`${API}/waveform/${toBase64Url(file.path)}`);
+      const res = await api.getWaveform(file.path);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Échec génération du sonogramme');
       setWaveformImage(data.image);
@@ -1631,11 +1431,7 @@ function App() {
     setWaveformApplying(true);
     setWaveformError(null);
     try {
-      const res = await fetch(`${API}/audio-edit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filePath: waveformFile.path, trimStart, trimEnd, fadeIn, fadeOut })
-      });
+      const res = await api.audioEdit(waveformFile.path, trimStart, trimEnd, fadeIn, fadeOut);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Échec du montage audio');
 
@@ -1662,11 +1458,7 @@ function App() {
 
   const handleRestoreQuarantine = async (quarantineName: string) => {
     try {
-      const res = await fetch(`${API}/quarantine/restore`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ quarantineNames: [quarantineName] })
-      });
+      const res = await api.restoreQuarantine([quarantineName]);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Échec restauration');
       loadQuarantineCount();
@@ -1681,7 +1473,7 @@ function App() {
   const handleEmptyTrash = async () => {
     setEmptyingTrash(true);
     try {
-      const res = await fetch(`${API}/quarantine/empty`, { method: 'POST' });
+      const res = await api.emptyQuarantine();
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Échec suppression');
       setRenameNotice(`🗑️ ${data.deleted} fichier(s) supprimé(s) définitivement${data.failed ? `, ${data.failed} échec(s)` : ''}`);
@@ -1696,7 +1488,7 @@ function App() {
 
   const loadBrowsePath = async (targetPath: string) => {
     try {
-      const res = await fetch(`${API}/browse?path=${encodeURIComponent(targetPath)}`);
+      const res = await api.browse(targetPath);
       const data = await res.json();
 
       if (!res.ok) {
@@ -1716,7 +1508,7 @@ function App() {
 
   const loadShortcuts = async () => {
     try {
-      const res = await fetch(`${API}/browse/shortcuts`);
+      const res = await api.browseShortcuts();
       const data = await res.json();
       setShortcuts(data.shortcuts || []);
     } catch {
@@ -1739,11 +1531,7 @@ function App() {
     setShowModal(false);
 
     try {
-      const res = await fetch(`${API}/scan`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dirPath })
-      });
+      const res = await api.scan(dirPath);
 
       if (res.ok) {
         const data = await res.json();
