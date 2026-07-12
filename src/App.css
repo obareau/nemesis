@@ -727,7 +727,7 @@ button, input, select {
 
 .col-lyrics-state.state-lyrics { color: #c084fc; }
 .col-lyrics-state.state-instrumental { color: var(--text-faint); }
-.col-lyrics-state.state-unknown { color: var(--border-light); }
+.col-lyrics-state.state-unknown { color: var(--text-muted); }
 
 .star-rating {
   display: flex;
@@ -786,6 +786,16 @@ button, input, select {
 .file-row.selected {
   background: var(--accent-soft);
   box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.file-row.playing {
+  background: rgba(76, 175, 125, 0.12);
+  box-shadow: inset 2px 0 0 var(--success);
+}
+
+.file-row.playing .file-name {
+  color: var(--success);
+  font-weight: 600;
 }
 
 .file-checkbox {
@@ -1585,6 +1595,16 @@ button, input, select {
 
 .group-file-card.discarded {
   opacity: 0.5;
+}
+
+.group-file-card.playing {
+  background: rgba(76, 175, 125, 0.12);
+  box-shadow: inset 2px 0 0 var(--success);
+}
+
+.group-file-card.playing .group-file-name {
+  color: var(--success);
+  font-weight: 600;
 }
 
 .group-file-row {

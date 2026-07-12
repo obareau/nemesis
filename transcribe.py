@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Transcrit un extrait de 15s à partir de t+15s (saute l'intro) via faster-whisper.
-Usage: python3 transcribe.py <file.mp3>
+Transcrit un extrait de 15s à partir de t+<offset>s (saute l'intro) via faster-whisper.
+Usage: python3 transcribe.py <file.mp3> [offset_secondes]
 Sortie: JSON {"text": "..."} sur stdout
 """
 import sys
@@ -10,15 +10,14 @@ import subprocess
 import tempfile
 import os
 
-SEGMENT_START = 15  # secondes — saute l'intro
 SEGMENT_DURATION = 15  # secondes
 
 
-def extract_segment(input_path: str, output_path: str) -> bool:
+def extract_segment(input_path: str, output_path: str, segment_start: int) -> bool:
     result = subprocess.run(
         [
             "ffmpeg", "-y", "-v", "error",
-            "-ss", str(SEGMENT_START),
+            "-ss", str(segment_start),
             "-t", str(SEGMENT_DURATION),
             "-i", input_path,
             "-ar", "16000", "-ac", "1",
@@ -40,16 +39,17 @@ def transcribe(wav_path: str) -> str:
 
 def main():
     if len(sys.argv) < 2:
-        print(json.dumps({"error": "usage: transcribe.py <file.mp3>"}))
+        print(json.dumps({"error": "usage: transcribe.py <file.mp3> [offset_secondes]"}))
         sys.exit(1)
 
     input_path = sys.argv[1]
+    segment_start = int(sys.argv[2]) if len(sys.argv) > 2 else 15
 
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         wav_path = tmp.name
 
     try:
-        if not extract_segment(input_path, wav_path):
+        if not extract_segment(input_path, wav_path, segment_start):
             print(json.dumps({"text": "", "error": "extraction ffmpeg échouée (fichier trop court ?)"}))
             return
 

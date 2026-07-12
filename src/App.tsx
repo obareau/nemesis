@@ -181,6 +181,7 @@ function App() {
   const [groupProcessing, setGroupProcessing] = useState(false);
   const [groupNotice, setGroupNotice] = useState<string | null>(null);
   const [analyzingPaths, setAnalyzingPaths] = useState<Set<string>>(new Set());
+const [rescanningLyricsPaths, setRescanningLyricsPaths] = useState<Set<string>>(new Set());
   // Panneau sonogramme — trim (couper début/fin) + fade in/out, réécrit le fichier
   // en place côté serveur (réversible via undo, l'original est sauvegardé à côté).
   const [waveformFile, setWaveformFile] = useState<File | null>(null);
@@ -963,6 +964,43 @@ function App() {
     }
   };
 
+  // Relance la transcription des paroles plus loin dans le morceau (intro longue = faux "instrumental")
+  const rescanLyrics = async (filePath: string, startOffset = 30) => {
+    setRescanningLyricsPaths(prev => new Set(prev).add(filePath));
+    try {
+      const res = await fetch(`${API}/lyrics-rescan`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filePath, startOffset })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Échec transcription');
+
+      const apply = (f: File) => f.path === filePath ? { ...f, lyrics: data.lyrics } : f;
+      setState(prev => ({
+        ...prev,
+        files: prev.files.map(apply),
+        duplicates: prev.duplicates.map(d => ({ ...d, files: d.files.map(apply) })),
+        similarPairs: prev.similarPairs.map(p => ({
+          ...p,
+          fileA: apply(p.fileA),
+          fileB: apply(p.fileB)
+        }))
+      }));
+      if (workingGroup) {
+        setWorkingGroup(prev => prev ? { ...prev, files: prev.files.map(apply) } : prev);
+      }
+    } catch (err) {
+      setGroupNotice(`⚠️ ${String(err instanceof Error ? err.message : err)}`);
+    } finally {
+      setRescanningLyricsPaths(prev => {
+        const next = new Set(prev);
+        next.delete(filePath);
+        return next;
+      });
+    }
+  };
+
   const openWaveformEditor = async (file: File) => {
     setWaveformFile(file);
     setWaveformImage(null);
@@ -1557,7 +1595,7 @@ function App() {
                   return (
                   <div
                     key={idx}
-                    className={`file-row ${idx % 2 === 0 ? 'even' : 'odd'} ${selectedFiles.has(file.path) ? 'selected' : ''}`}
+                    className={`file-row ${idx % 2 === 0 ? 'even' : 'odd'} ${selectedFiles.has(file.path) ? 'selected' : ''} ${playingFilePath === file.path ? 'playing' : ''}`}
                     onClick={() => toggleFileSelection(file.path)}
                   >
                     <input
@@ -1901,7 +1939,7 @@ function App() {
                   const lyricsState = getLyricsState(file);
                   const isAnalyzing = analyzingPaths.has(file.path);
                   return (
-                <div key={file.path} className={`group-file-card ${keepPaths.has(file.path) ? 'kept' : 'discarded'}`}>
+                <div key={file.path} className={`group-file-card ${keepPaths.has(file.path) ? 'kept' : 'discarded'} ${playingFilePath === file.path ? 'playing' : ''}`}>
                   <div className="group-file-row">
                     <input
                       type="checkbox"
@@ -1914,7 +1952,7 @@ function App() {
                     <StarRating value={file.rating} onChange={(n) => rateFile(file.path, n)} size={12} />
                     <span className="group-file-name" title={file.path}>{file.name}</span>
                     <span className="group-file-size">{(file.size / 1024 / 1024).toFixed(1)} MB</span>
-                    <span className="group-file-fate">{keepPaths.has(file.path) ? 'gardé' : 'corbeille'}</span>
+                    <span className="group-file-fate">{keepPaths.has(file.path) ? 'gardé' : groupQuarantine ? 'corbeille' : 'inchangé'}</span>
                     <button
                       className="waveform-btn"
                       title="Sonogramme — trim / fade"
@@ -2337,6 +2375,16 @@ function App() {
                     <div className="info-lyrics-empty">
                       {lyricsState === 'instrumental' ? 'Aucune parole détectée sur ce morceau.' : 'Ce fichier n\'a pas encore été passé au crible de la transcription (étape Paroles du scan).'}
                     </div>
+                  )}
+                  {lyricsState !== 'lyrics' && (
+                    <button
+                      className="meta-analyze-btn"
+                      onClick={() => rescanLyrics(file.path, 30)}
+                      disabled={rescanningLyricsPaths.has(file.path)}
+                      title="Relancer la transcription plus loin dans le morceau (utile si l'intro est longue)"
+                    >
+                      {rescanningLyricsPaths.has(file.path) ? '…transcription' : '🎤 Réessayer (intro longue)'}
+                    </button>
                   )}
                 </div>
               </div>

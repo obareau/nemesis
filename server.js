@@ -604,11 +604,11 @@ function analyzeAudioFeatures(filePath) {
   });
 }
 
-function transcribeLyrics(filePath) {
+function transcribeLyrics(filePath, startOffset = 15) {
   return new Promise((resolve) => {
     let proc;
     try {
-      proc = spawn(WHISPER_PYTHON, [TRANSCRIBE_SCRIPT, filePath]);
+      proc = spawn(WHISPER_PYTHON, [TRANSCRIBE_SCRIPT, filePath, String(startOffset)]);
     } catch {
       resolve(null);
       return;
@@ -1113,6 +1113,39 @@ function applyAudioFeatures(filePath, { bpm, key, scale }) {
   for (const pair of analysisState.similarPairs) { apply(pair.fileA); apply(pair.fileB); }
 }
 
+function applyLyrics(filePath, lyrics) {
+  const apply = (f) => {
+    if (f && f.path === filePath) f.lyrics = lyrics;
+  };
+  analysisState.files.forEach(apply);
+  for (const dup of analysisState.duplicates) dup.files.forEach(apply);
+  for (const pair of analysisState.similarPairs) { apply(pair.fileA); apply(pair.fileB); }
+}
+
+// API: relance la transcription des paroles à un offset donné (bypass cache) — utile
+// pour les morceaux à intro longue où la fenêtre par défaut (t+15s) tombe encore dans l'instru.
+app.post('/api/lyrics-rescan', express.json(), async (req, res) => {
+  const { filePath, startOffset = 30 } = req.body;
+  if (!filePath) {
+    return res.status(400).json({ error: 'filePath requis' });
+  }
+
+  const fileEntry = analysisState.files.find(f => f.path === filePath);
+  if (!fileEntry) {
+    return res.status(404).json({ error: 'Fichier introuvable dans le projet courant' });
+  }
+
+  try {
+    const lyrics = await transcribeLyrics(filePath, Number(startOffset));
+    setCachedAnalysis(fileEntry, { lyrics });
+    applyLyrics(filePath, lyrics);
+    persistProject();
+    res.json({ success: true, lyrics, startOffset: Number(startOffset) });
+  } catch (err) {
+    res.status(500).json({ error: `Échec transcription: ${err.message}` });
+  }
+});
+
 // API: Sonogramme (waveform PNG) d'un fichier, mis en cache disque par chemin+taille+mtime.
 // Retourne aussi la durée (ffprobe) pour que le frontend positionne les poignées de trim.
 app.get('/api/waveform/:encodedPath', async (req, res) => {
@@ -1305,12 +1338,19 @@ app.post('/api/rename-bulk', express.json(), (req, res) => {
       if (title && title.trim()) tags.title = title.trim();
       NodeID3.update(tags, filePath);
 
-      // Renommage physique : "{author} - [{titre} - ]{original}"
+      // Renommage physique : "{author} - [{titre}]" remplace le nom d'origine
+      // (pas de concaténation) — suffixe numérique si collision avec un fichier existant.
       const dir = path.dirname(filePath);
-      const base = path.basename(filePath);
+      const ext = path.extname(filePath);
       const prefix = title && title.trim() ? `${author} - ${title.trim()}` : author;
-      const newName = base.startsWith(prefix) ? base : `${prefix} - ${base}`;
-      const newPath = path.join(dir, newName);
+      let newName = `${prefix}${ext}`;
+      let newPath = path.join(dir, newName);
+      let n = 2;
+      while (newPath !== filePath && fs.existsSync(newPath)) {
+        newName = `${prefix} (${n})${ext}`;
+        newPath = path.join(dir, newName);
+        n++;
+      }
 
       if (newPath !== filePath) {
         safeMoveSync(filePath, newPath);
