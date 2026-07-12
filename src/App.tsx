@@ -27,6 +27,13 @@ interface MoodTrack {
   bpm?: number;
 }
 
+interface WaveformDiff {
+  totalWidth: number;
+  height: number;
+  a: { image: string; width: number; duration: number };
+  b: { image: string; width: number; duration: number };
+}
+
 type AnalysisMethod = 'size' | 'name' | 'fingerprint' | 'lyrics';
 
 // Miroir de SHOW_MOODS (server.js / subwave settings.ts) — source de vérité réelle
@@ -163,6 +170,25 @@ function StarIcon({ size = 14, filled = false }: { size?: number; filled?: boole
   );
 }
 
+// Score de confiance "vrai doublon" pour un groupe — combine le score de similarité déjà
+// calculé côté détection avec un signal BPM/tonalité quand les deux fichiers sont analysés :
+// concordants ça confirme, discordants ça affaiblit (probablement pas le même morceau malgré
+// le nom/la taille identique). Sert à prioriser les 50+ groupes plutôt que les traiter à l'aveugle.
+function groupConfidence(dup: Duplicate): number {
+  let score = dup.similarity ?? (dup.method === 'size' ? 95 : 70);
+
+  const analyzed = dup.files.filter(f => f.bpm);
+  if (analyzed.length >= 2) {
+    const [a, b] = analyzed;
+    const bpmClose = Math.abs((a.bpm || 0) - (b.bpm || 0)) <= 2;
+    const keyMatch = a.key === b.key && a.scale === b.scale;
+    if (bpmClose && keyMatch) score = Math.min(100, score + 8);
+    else if (!bpmClose && !keyMatch) score = Math.max(0, score - 15);
+  }
+
+  return Math.round(score);
+}
+
 function App() {
   const [state, setState] = useState<AnalysisState>({
     status: 'idle',
@@ -194,6 +220,7 @@ function App() {
   const [similarMin, setSimilarMin] = useState(80);
   const [similarMax, setSimilarMax] = useState(95);
   const [showSimilar, setShowSimilar] = useState(false);
+  const [sortByConfidence, setSortByConfidence] = useState(false);
   const [openMood, setOpenMood] = useState<string | null>(null);
   const [moodPanelTracks, setMoodPanelTracks] = useState<MoodTrack[]>([]);
   const [moodPanelLoading, setMoodPanelLoading] = useState(false);
@@ -236,6 +263,9 @@ function App() {
   const [muteLeft, setMuteLeft] = useState(false);
   const [muteRight, setMuteRight] = useState(false);
   const [compareBalance, setCompareBalance] = useState(0);
+  const [diffView, setDiffView] = useState(false);
+  const [diffData, setDiffData] = useState<WaveformDiff | null>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
   const [batchAnalyzing, setBatchAnalyzing] = useState(false);
   const [batchAnalyzeProgress, setBatchAnalyzeProgress] = useState({ done: 0, total: 0 });
   // Panneau sonogramme — trim (couper début/fin) + fade in/out, réécrit le fichier
@@ -628,10 +658,26 @@ function App() {
     setCompareBalance(0);
     setCompareWaveformA(null);
     setCompareWaveformB(null);
+    setDiffView(false);
+    setDiffData(null);
     compareWiredRef.current = false;
     fetch(`${API}/waveform/${toBase64Url(fileA.path)}`).then(r => r.json()).then(d => d.image && setCompareWaveformA(d.image)).catch(() => {});
     fetch(`${API}/waveform/${toBase64Url(fileB.path)}`).then(r => r.json()).then(d => d.image && setCompareWaveformB(d.image)).catch(() => {});
   };
+
+  // Vue "diff" : sonogrammes des deux fichiers calés sur t=0 à la même échelle px/seconde,
+  // superposés en fondu additif (bleu=A, orange=B) — révèle intro coupée/outro en plus/durée
+  // différente sans corrélation audio complexe.
+  useEffect(() => {
+    if (!diffView || !compareFiles) { setDiffData(null); return; }
+    const [fileA, fileB] = compareFiles;
+    setDiffLoading(true);
+    fetch(`${API}/waveform-diff?pathA=${encodeURIComponent(fileA.path)}&pathB=${encodeURIComponent(fileB.path)}`)
+      .then(r => r.json())
+      .then(d => { if (!d.error) setDiffData(d); })
+      .catch(() => {})
+      .finally(() => setDiffLoading(false));
+  }, [diffView, compareFiles]);
 
   const closeCompare = () => {
     compareAudioARef.current?.pause();
@@ -1021,13 +1067,20 @@ function App() {
   const [showSurprise, setShowSurprise] = useState(false);
   const [surpriseActing, setSurpriseActing] = useState(false);
 
+  // Priorise les morceaux jamais écoutés (mélangés entre eux), complète avec les autres
+  // (mélangés aussi) si moins de 10 inédits restent — ferme la boucle avec le compteur d'écoutes.
   const startSurprise = () => {
-    const pool = [...state.files];
-    for (let i = pool.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [pool[i], pool[j]] = [pool[j], pool[i]];
-    }
-    const picked = pool.slice(0, 10);
+    const shuffle = (arr: File[]) => {
+      const a = [...arr];
+      for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+      }
+      return a;
+    };
+    const unplayed = shuffle(state.files.filter(f => !f.playCount));
+    const played = shuffle(state.files.filter(f => f.playCount));
+    const picked = [...unplayed, ...played].slice(0, 10);
     if (picked.length === 0) return;
     setSurpriseQueue(picked);
     setSurpriseIndex(0);
@@ -1734,9 +1787,9 @@ function App() {
     selectionAnchorRef.current = filePath;
   };
 
-  const filteredDuplicates = state.duplicates.filter(
-    d => d.method === analysisMode && !processedGroups.has(groupSignature(d))
-  );
+  const filteredDuplicates = state.duplicates
+    .filter(d => d.method === analysisMode && !processedGroups.has(groupSignature(d)))
+    .sort((a, b) => sortByConfidence ? groupConfidence(b) - groupConfidence(a) : 0);
 
   // Taille/Nom sont calculés en synchrone dès le scan lancé ; Audio/Paroles sont
   // calculés en fond après leur boucle complète — un mode "vide" pendant qu'il
@@ -2114,7 +2167,7 @@ function App() {
                 </button>
               )}
               {state.files.length > 0 && (
-                <button className="surprise-btn" onClick={startSurprise} title="Écoute rapide de 10 morceaux au hasard">
+                <button className="surprise-btn" onClick={startSurprise} title="Écoute rapide de 10 morceaux — priorité aux jamais-écoutés">
                   🎲 Surprends-moi
                 </button>
               )}
@@ -2389,9 +2442,20 @@ function App() {
                 <XIcon size={13} />
               </button>
             ) : (
-              <span className="panel-count">
-                {showSimilar ? filteredSimilarPairs.length : filteredDuplicates.length}
-              </span>
+              <div className="panel-header-actions">
+                {!showSimilar && filteredDuplicates.length > 0 && (
+                  <button
+                    className={`confidence-sort-btn ${sortByConfidence ? 'active' : ''}`}
+                    onClick={() => setSortByConfidence(p => !p)}
+                    title="Trier les groupes par score de confiance (similarité + concordance BPM/tonalité)"
+                  >
+                    🎯 Confiance
+                  </button>
+                )}
+                <span className="panel-count">
+                  {showSimilar ? filteredSimilarPairs.length : filteredDuplicates.length}
+                </span>
+              </div>
             )}
           </div>
 
@@ -2500,7 +2564,9 @@ function App() {
             </div>
           ) : (
             <div className="duplicates-list">
-              {filteredDuplicates.map((dup, idx) => (
+              {filteredDuplicates.map((dup, idx) => {
+                const confidence = groupConfidence(dup);
+                return (
                 <div
                   key={idx}
                   className={`duplicate-group clickable method-${dup.method}`}
@@ -2509,7 +2575,12 @@ function App() {
                 >
                   <div className="dup-header">
                     <span><LinkIcon size={12} /> Groupe {idx + 1}</span>
-                    {dup.similarity && <span className="similarity">{dup.similarity}%</span>}
+                    <span
+                      className={`confidence-badge ${confidence >= 85 ? 'high' : confidence >= 60 ? 'mid' : 'low'}`}
+                      title="Score de confiance : similarité détectée + concordance BPM/tonalité si analysés"
+                    >
+                      🎯 {confidence}%
+                    </span>
                   </div>
                   {dup.files.map((file, i) => (
                     <div key={i} className="dup-file">
@@ -2518,7 +2589,8 @@ function App() {
                     </div>
                   ))}
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
@@ -3145,8 +3217,51 @@ function App() {
             <div className="compare-modal" onClick={(e) => e.stopPropagation()}>
               <div className="waveform-header">
                 <span>🎧 Comparaison A/B stéréo</span>
-                <button className="surprise-close" onClick={closeCompare} title="Fermer">✕</button>
+                <div className="compare-header-actions">
+                  <button
+                    className={`diff-toggle-btn ${diffView ? 'active' : ''}`}
+                    onClick={() => setDiffView(p => !p)}
+                    title="Superposer les deux sonogrammes calés sur t=0 pour repérer une intro coupée, un outro en plus ou une durée différente"
+                  >
+                    🔍 Vue diff
+                  </button>
+                  <button className="surprise-close" onClick={closeCompare} title="Fermer">✕</button>
+                </div>
               </div>
+
+              {diffView && (
+                <div className="diff-section">
+                  {diffLoading ? (
+                    <div className="empty-state small"><WaveIcon size={16} /><p>Génération des sonogrammes alignés…</p></div>
+                  ) : diffData ? (
+                    <>
+                      <div className="diff-overlay">
+                        <img
+                          className="diff-layer"
+                          src={diffData.a.image}
+                          style={{ width: `${(diffData.a.width / diffData.totalWidth) * 100}%` }}
+                          alt=""
+                          draggable={false}
+                        />
+                        <img
+                          className="diff-layer"
+                          src={diffData.b.image}
+                          style={{ width: `${(diffData.b.width / diffData.totalWidth) * 100}%` }}
+                          alt=""
+                          draggable={false}
+                        />
+                      </div>
+                      <div className="diff-legend">
+                        <span className="diff-legend-item a">■ A seul ({formatTime(diffData.a.duration)})</span>
+                        <span className="diff-legend-item both">■ Les deux se recouvrent</span>
+                        <span className="diff-legend-item b">■ B seul ({formatTime(diffData.b.duration)})</span>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="empty-state small"><WarnIcon size={16} /><p>Sonogrammes indisponibles</p></div>
+                  )}
+                </div>
+              )}
 
               <div className="compare-split">
                 <div className="compare-side">
@@ -3562,9 +3677,9 @@ function CheckIcon() {
   );
 }
 
-function WarnIcon() {
+function WarnIcon({ size = 14 }: { size?: number }) {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
       <path d="M12 9v4M12 17h.01" />
     </svg>

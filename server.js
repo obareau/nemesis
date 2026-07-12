@@ -1257,6 +1257,58 @@ async function warmWaveformCache(files, generation) {
   await Promise.all(Array.from({ length: concurrency }, worker));
 }
 
+// API: Sonogrammes de deux fichiers rendus à la MÊME échelle px/seconde (calée sur t=0),
+// pour une comparaison A/B visuelle — pas de corrélation croisée, mais un calage commun au
+// début suffit à révéler d'un coup d'œil une intro coupée, un outro en plus, ou une durée
+// différente entre deux candidats doublons.
+app.get('/api/waveform-diff', async (req, res) => {
+  const { pathA, pathB } = req.query;
+  if (!pathA || !pathB) {
+    return res.status(400).json({ error: 'pathA et pathB requis' });
+  }
+  if (!analysisState.files.some(f => f.path === pathA) || !analysisState.files.some(f => f.path === pathB)) {
+    return res.status(404).json({ error: 'Fichier introuvable dans le projet courant' });
+  }
+
+  try {
+    const [durationA, durationB] = await Promise.all([probeDuration(pathA), probeDuration(pathB)]);
+    const maxDuration = Math.max(durationA, durationB, 1);
+    const PX_PER_SEC = 12;
+    const totalWidth = Math.max(200, Math.min(4000, Math.round(maxDuration * PX_PER_SEC)));
+    const height = 100;
+
+    const genAligned = async (filePath, duration, color) => {
+      const width = Math.max(20, Math.round((duration / maxDuration) * totalWidth));
+      const stat = fs.statSync(filePath);
+      const cacheKey = Buffer.from(`diff:${filePath}:${stat.size}:${Math.floor(stat.mtimeMs)}:${width}x${height}:${color}`).toString('base64url');
+      const cachePath = path.join(WAVEFORM_CACHE_DIR, `${cacheKey}.png`);
+      if (!fs.existsSync(cachePath)) {
+        fs.mkdirSync(WAVEFORM_CACHE_DIR, { recursive: true });
+        await runFfmpeg([
+          '-y', '-i', filePath,
+          '-filter_complex', `showwavespic=s=${width}x${height}:colors=${color}`,
+          '-frames:v', '1', cachePath
+        ]);
+      }
+      return { image: `data:image/png;base64,${fs.readFileSync(cachePath).toString('base64')}`, width };
+    };
+
+    const [a, b] = await Promise.all([
+      genAligned(pathA, durationA, '0x3b82f6'),
+      genAligned(pathB, durationB, '0xf59e0b')
+    ]);
+
+    res.json({
+      totalWidth,
+      height,
+      a: { ...a, duration: durationA },
+      b: { ...b, duration: durationB }
+    });
+  } catch (err) {
+    res.status(500).json({ error: `Échec génération sonogrammes alignés: ${err.message}` });
+  }
+});
+
 // API: Sonogramme (waveform PNG) d'un fichier, mis en cache disque par chemin+taille+mtime.
 // Retourne aussi la durée (ffprobe) pour que le frontend positionne les poignées de trim.
 app.get('/api/waveform/:encodedPath', async (req, res) => {

@@ -1259,6 +1259,43 @@ button, input, select {
   font-variant-numeric: tabular-nums;
 }
 
+.confidence-badge {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 9px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.confidence-badge.high { background: rgba(76, 175, 125, 0.2); color: var(--success); }
+.confidence-badge.mid { background: rgba(224, 168, 56, 0.2); color: #e0a838; }
+.confidence-badge.low { background: rgba(220, 80, 80, 0.2); color: #e05a5a; }
+
+.confidence-sort-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  color: var(--text-muted);
+  font-size: 9.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.confidence-sort-btn:hover { color: var(--fg); }
+
+.confidence-sort-btn.active {
+  background: rgba(224, 168, 56, 0.18);
+  border-color: rgba(224, 168, 56, 0.5);
+  color: #e0a838;
+}
+
 .dup-file {
   display: flex;
   justify-content: space-between;
@@ -2873,6 +2910,71 @@ button, input, select {
   accent-color: #6db2ff;
   cursor: pointer;
 }
+
+.compare-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.diff-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  color: var(--text-muted);
+  font-size: 9.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.diff-toggle-btn:hover { color: var(--fg); }
+
+.diff-toggle-btn.active {
+  background: rgba(80, 160, 255, 0.18);
+  border-color: rgba(80, 160, 255, 0.5);
+  color: #6db2ff;
+}
+
+.diff-section {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.diff-overlay {
+  position: relative;
+  height: 70px;
+  background: #000;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.diff-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  object-fit: fill;
+  mix-blend-mode: screen;
+}
+
+.diff-legend {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 9.5px;
+  color: var(--text-faint);
+}
+
+.diff-legend-item.a { color: #3b82f6; }
+.diff-legend-item.both { color: #d9d9d9; }
+.diff-legend-item.b { color: #f59e0b; }
 
 .waveform-canvas {
   position: relative;
