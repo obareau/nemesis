@@ -6,6 +6,22 @@ import type {
   File, MoodTrack, WaveformDiff, AnalysisMethod, Duplicate,
   AnalysisState, ActionLogEntry, ProjectSummary, Shortcut, QuarantineItem
 } from './api';
+import {
+  StarRating, StarIcon, ScaleIcon, LayersIcon, RulerIcon, TextIcon, WaveIcon,
+  MicIcon, MicOffIcon, HelpIcon, TagIcon, SparkleIcon, FolderIcon, PlayIcon,
+  PauseIcon, WaveformIcon, PrevIcon, NextIcon, VolumeIcon, LinkIcon, EditIcon,
+  NavidromeIcon, XIcon, TrashIcon, UndoIcon, CheckIcon, WarnIcon
+} from './icons';
+import { HelpModal } from './components/HelpModal';
+import { formatTime, getLyricsState } from './format';
+import { moodColor } from './moods';
+import { SurpriseModal } from './components/SurpriseModal';
+import { InfoPanelModal } from './components/InfoPanelModal';
+import { WaveformEditorModal } from './components/WaveformEditorModal';
+import { CompareModal } from './components/CompareModal';
+import { ProjectPickerModal } from './components/ProjectPickerModal';
+import { BrowserModal } from './components/BrowserModal';
+import { GroupPanel } from './components/GroupPanel';
 
 // Miroir de SHOW_MOODS (server.js / subwave settings.ts) — source de vérité réelle
 // récupérée via GET /api/moods au montage ; cette liste ne sert que de fallback.
@@ -14,62 +30,6 @@ const DEFAULT_MOODS = [
   'focus', 'workout', 'driving', 'cooking', 'rainy', 'sunny', 'night',
   'morning', 'evening', 'festival', 'cultural'
 ];
-
-// Couleur par mood — regroupées par famille d'énergie/caractère plutôt qu'arbitraire :
-// rouge/orange = haute énergie, jaune/terracotta = chaud, bleu/vert = calme/posé,
-// violet/indigo = introspectif/nocturne.
-const MOOD_COLORS: Record<string, string> = {
-  energetic: '#e63946',
-  workout: '#f3722c',
-  driving: '#f8961e',
-  festival: '#f72585',
-  celebratory: '#ffb703',
-  sunny: '#ffd60a',
-  morning: '#ffb4a2',
-  cooking: '#e07a5f',
-  cultural: '#2a9d8f',
-  focus: '#457b9d',
-  romantic: '#d81159',
-  calm: '#8ecae6',
-  reflective: '#6d6875',
-  spiritual: '#7b2cbf',
-  rainy: '#6c757d',
-  night: '#22223b',
-  evening: '#3a0ca3'
-};
-
-function moodColor(mood: string): string {
-  return MOOD_COLORS[mood] || '#888';
-}
-
-// Note en étoiles compacte et cliquable — pour trier vite garder/quarantaine
-function StarRating({ value = 0, onChange, size = 13 }: { value?: number; onChange: (n: number) => void; size?: number }) {
-  return (
-    <div className="star-rating" onClick={(e) => e.stopPropagation()}>
-      {[1, 2, 3, 4, 5].map((n) => (
-        <button
-          key={n}
-          type="button"
-          className={`star-btn ${n <= value ? 'filled' : ''}`}
-          onClick={() => onChange(n === value ? 0 : n)}
-          title={`${n} étoile${n > 1 ? 's' : ''}`}
-        >
-          <svg width={size} height={size} viewBox="0 0 24 24" fill={n <= value ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round">
-            <path d="m12 2 3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2Z" />
-          </svg>
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function StarIcon({ size = 14, filled = false }: { size?: number; filled?: boolean }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round">
-      <path d="m12 2 3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2Z" />
-    </svg>
-  );
-}
 
 // Score de confiance "vrai doublon" pour un groupe — combine le score de similarité déjà
 // calculé côté détection avec un signal BPM/tonalité quand les deux fichiers sont analysés :
@@ -471,24 +431,6 @@ function App() {
       .catch(() => { /* pas bloquant — le compteur restera juste inchangé pour cette lecture */ });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playingFilePath]);
-
-  const formatTime = (secs: number) => {
-    if (!isFinite(secs) || secs < 0) return '0:00';
-    const m = Math.floor(secs / 60);
-    const s = Math.floor(secs % 60);
-    return `${m}:${s.toString().padStart(2, '0')}`;
-  };
-
-  const formatDate = (ms: number) => new Date(ms).toLocaleDateString('fr-FR', {
-    day: '2-digit', month: '2-digit', year: 'numeric'
-  });
-
-  // 'unknown' = étape Paroles jamais passée sur ce fichier (pas candidat doublon),
-  // 'instrumental' = transcription vide/trop courte, 'lyrics' = texte réel détecté
-  const getLyricsState = (file: File): 'unknown' | 'instrumental' | 'lyrics' => {
-    if (file.lyrics == null) return 'unknown';
-    return file.lyrics.trim().length < 8 ? 'instrumental' : 'lyrics';
-  };
 
   const togglePlayPause = () => {
     const audio = audioRef.current;
@@ -2517,960 +2459,164 @@ function App() {
 
       {/* SÉLECTEUR DE PROJET */}
       {showProjectPicker && (
-        <div className="modal-overlay" onClick={() => setShowProjectPicker(false)}>
-          <div className="modal-content project-picker-modal" onClick={(e) => e.stopPropagation()}>
-            <h2><FolderIcon size={18} /> Projets</h2>
-            <p className="project-picker-hint">
-              Un dossier scanné = un projet durable. Reprends où tu en étais, ou ouvre un nouveau dossier.
-            </p>
-
-            {projects.length === 0 ? (
-              <div className="empty-state small">
-                <FolderIcon size={22} />
-                <p>Aucun projet pour l&apos;instant</p>
-              </div>
-            ) : (
-              <div className="project-list">
-                {projects.map((p) => (
-                  <div key={p.dirPath} className={`project-row ${p.status}`}>
-                    {confirmDeleteProject === p.dirPath ? (
-                      <div className="project-delete-confirm">
-                        <span>
-                          Supprimer le <strong>suivi</strong> de ce projet ({p.actionCount} action(s) journalisée(s)) ?
-                          Les fichiers audio ne seront pas touchés.
-                        </span>
-                        <div className="project-delete-confirm-actions">
-                          <button onClick={() => setConfirmDeleteProject(null)} disabled={deletingProject}>
-                            Annuler
-                          </button>
-                          <button
-                            className="project-delete-confirm-btn"
-                            onClick={() => deleteProject(p.dirPath)}
-                            disabled={deletingProject}
-                          >
-                            {deletingProject ? 'Suppression…' : 'Confirmer'}
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <>
-                        <div className="project-row-info">
-                          <span className="project-row-path" title={p.dirPath}>{p.dirPath}</span>
-                          <span className="project-row-meta">
-                            {p.filesCount} fichiers · {p.duplicatesCount} groupes · {p.actionCount} action(s)
-                            {p.status === 'done' && <span className="project-done-badge"> · terminé</span>}
-                          </span>
-                        </div>
-                        <div className="project-row-actions">
-                          <button
-                            className="top-btn"
-                            onClick={() => p.status === 'done' ? reopenDoneProject(p.dirPath) : resumeProject(p.dirPath)}
-                          >
-                            {p.status === 'done' ? 'Rouvrir' : 'Reprendre'}
-                          </button>
-                          <button
-                            className="project-delete-btn"
-                            onClick={() => setConfirmDeleteProject(p.dirPath)}
-                            title="Supprimer le suivi de ce projet (pas les fichiers)"
-                          >
-                            <TrashIcon />
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div className="modal-actions">
-              <button className="modal-btn-cancel" onClick={() => setShowProjectPicker(false)}>
-                Fermer
-              </button>
-              <button
-                className="modal-btn"
-                onClick={() => {
-                  setShowProjectPicker(false);
-                  handleScanDirectory();
-                }}
-              >
-                <FolderIcon size={14} /> Nouveau dossier
-              </button>
-            </div>
-          </div>
-        </div>
+        <ProjectPickerModal
+          projects={projects}
+          confirmDeleteProject={confirmDeleteProject}
+          deletingProject={deletingProject}
+          onClose={() => setShowProjectPicker(false)}
+          onSetConfirmDelete={setConfirmDeleteProject}
+          onDeleteProject={deleteProject}
+          onResume={resumeProject}
+          onReopen={reopenDoneProject}
+          onNewFolder={() => {
+            setShowProjectPicker(false);
+            handleScanDirectory();
+          }}
+        />
       )}
 
       {/* PANNEAU DE TRAVAIL DE GROUPE */}
       {workingGroup && (
-        <div className="modal-overlay" onClick={() => setWorkingGroup(null)}>
-          <div className="modal-content group-modal" onClick={(e) => e.stopPropagation()}>
-            <h2>
-              <LinkIcon size={16} /> Traiter le groupe
-              <span className={`group-method-badge method-${workingGroup.method}`}>
-                {workingGroup.method}{workingGroup.similarity ? ` · ${workingGroup.similarity}%` : ''}
-              </span>
-            </h2>
-
-            <div className="group-files">
-              <div className="group-files-hint">
-                Note pour comparer, coche les fichiers à <strong>garder</strong> — les autres partent en corbeille (réversible)
-              </div>
-              {[...workingGroup.files]
-                .sort((a, b) => (b.rating || 0) - (a.rating || 0))
-                .map((file) => {
-                  const lyricsState = getLyricsState(file);
-                  const isAnalyzing = analyzingPaths.has(file.path);
-                  return (
-                <div key={file.path} className={`group-file-card ${keepPaths.has(file.path) ? 'kept' : 'discarded'} ${playingFilePath === file.path ? 'playing' : ''}`}>
-                  <div className="group-file-row">
-                    <input
-                      type="checkbox"
-                      checked={keepPaths.has(file.path)}
-                      onChange={() => toggleKeep(file.path)}
-                    />
-                    <button className="play-btn" onClick={() => playFileByPath(file.path)} title="Écouter">
-                      <PlayIcon />
-                    </button>
-                    <StarRating value={file.rating} onChange={(n) => rateFile(file.path, n)} size={12} />
-                    <span className="group-file-name" title={file.path}>{file.name}</span>
-                    <span className="group-file-size">{(file.size / 1024 / 1024).toFixed(1)} MB</span>
-                    <span className="group-file-fate">{keepPaths.has(file.path) ? 'gardé' : groupQuarantine ? 'corbeille' : 'inchangé'}</span>
-                    <button
-                      className="waveform-btn"
-                      title="Sonogramme — trim / fade"
-                      onClick={() => openWaveformEditor(file)}
-                    >
-                      <WaveformIcon />
-                    </button>
-                    <button
-                      className="group-file-trash"
-                      title="Mettre ce fichier en quarantaine tout de suite"
-                      onClick={() => quickQuarantine([file.path])}
-                    >
-                      <TrashIcon />
-                    </button>
-                  </div>
-                  <div className="group-file-meta">
-                    <span className="meta-item" title="Date de création">
-                      📅 {formatDate(file.mtime)}
-                    </span>
-                    <button className={`meta-item meta-item-btn lyrics-${lyricsState}`} onClick={() => openInfo(file.path)} title="Voir les infos complètes">
-                      {lyricsState === 'lyrics' ? <MicIcon size={11} /> : lyricsState === 'instrumental' ? <MicOffIcon size={11} /> : <HelpIcon size={11} />}
-                      {lyricsState === 'lyrics' ? 'Paroles' : lyricsState === 'instrumental' ? 'Instrumental' : 'Paroles inconnues'}
-                    </button>
-                    {file.bpm ? (
-                      <span className="meta-item">🎵 {file.bpm} BPM · {file.key}{file.scale === 'minor' ? 'm' : ''}</span>
-                    ) : (
-                      <button className="meta-analyze-btn" onClick={() => analyzeAudio(file.path)} disabled={isAnalyzing}>
-                        {isAnalyzing ? '…analyse' : '🎵 Analyser BPM/tonalité'}
-                      </button>
-                    )}
-                    {file.pushedToNavidrome && (
-                      <span className="meta-item navidrome-pushed" title="Déjà envoyé vers Navidrome">
-                        <NavidromeIcon size={11} /> Envoyé
-                      </span>
-                    )}
-                  </div>
-                </div>
-                  );
-                })}
-            </div>
-
-            <div className="group-options">
-              <label className="group-check">
-                <input
-                  type="checkbox"
-                  checked={groupQuarantine}
-                  onChange={(e) => setGroupQuarantine(e.target.checked)}
-                />
-                Mettre les non-gardés en corbeille
-              </label>
-
-              <label className="group-check">
-                <input
-                  type="checkbox"
-                  checked={groupRename}
-                  onChange={(e) => setGroupRename(e.target.checked)}
-                />
-                Renommer + taguer les gardés
-              </label>
-
-              {groupRename && (
-                <div className="group-rename-fields">
-                  <div className="author-input-row">
-                    <input
-                      type="text"
-                      placeholder="Auteur fictif"
-                      value={groupAuthor}
-                      onChange={(e) => setGroupAuthor(e.target.value)}
-                    />
-                    <button className="generate-btn" onClick={generateGroupAuthor} disabled={generatingAuthor} title="Générer via Ollama">
-                      {generatingAuthor ? '…' : <SparkleIcon />}
-                    </button>
-                  </div>
-                  <div className="author-input-row">
-                    <input
-                      type="text"
-                      placeholder="Titre (3-4 mots depuis paroles)"
-                      value={groupTitle}
-                      onChange={(e) => setGroupTitle(e.target.value)}
-                    />
-                    <button className="generate-btn" onClick={generateGroupTitle} disabled={generatingTitle} title="Générer depuis les paroles">
-                      {generatingTitle ? '…' : <MicIcon />}
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              <label className="group-check">
-                <input
-                  type="checkbox"
-                  checked={groupNavidrome}
-                  onChange={(e) => setGroupNavidrome(e.target.checked)}
-                />
-                Envoyer les gardés vers Navidrome
-              </label>
-
-              {(groupNavidrome || groupRename) && (
-                <div className="mood-checkboxes">
-                  {availableMoods.map((m) => (
-                    <button
-                      key={m}
-                      type="button"
-                      className={`mood-chip ${groupMoods.has(m) ? 'active' : ''}`}
-                      style={{
-                        background: groupMoods.has(m) ? moodColor(m) : undefined,
-                        borderColor: moodColor(m)
-                      } as any}
-                      onClick={() => toggleGroupMood(m)}
-                    >
-                      <span className="mood-dot" style={{ background: moodColor(m) }} />
-                      {m}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {groupNotice && <div className="group-notice">{groupNotice}</div>}
-
-            <div className="modal-actions">
-              <button className="modal-btn-cancel" onClick={() => setWorkingGroup(null)} disabled={groupProcessing}>
-                Annuler
-              </button>
-              <button className="modal-btn-cancel" onClick={skipGroup} disabled={groupProcessing}>
-                Ignorer ce groupe
-              </button>
-              <button className="modal-btn" onClick={applyGroup} disabled={groupProcessing}>
-                {groupProcessing ? 'Traitement…' : 'Appliquer'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <GroupPanel
+          group={workingGroup}
+          keepPaths={keepPaths}
+          availableMoods={availableMoods}
+          groupQuarantine={groupQuarantine}
+          groupRename={groupRename}
+          groupNavidrome={groupNavidrome}
+          groupAuthor={groupAuthor}
+          groupTitle={groupTitle}
+          groupMoods={groupMoods}
+          groupNotice={groupNotice}
+          groupProcessing={groupProcessing}
+          generatingAuthor={generatingAuthor}
+          generatingTitle={generatingTitle}
+          analyzingPaths={analyzingPaths}
+          playingFilePath={playingFilePath}
+          onClose={() => setWorkingGroup(null)}
+          onToggleKeep={toggleKeep}
+          onPlay={playFileByPath}
+          onRate={rateFile}
+          onOpenWaveformEditor={openWaveformEditor}
+          onQuickQuarantine={quickQuarantine}
+          onOpenInfo={openInfo}
+          onAnalyzeAudio={analyzeAudio}
+          onSetGroupQuarantine={setGroupQuarantine}
+          onSetGroupRename={setGroupRename}
+          onSetGroupNavidrome={setGroupNavidrome}
+          onSetGroupAuthor={setGroupAuthor}
+          onSetGroupTitle={setGroupTitle}
+          onGenerateAuthor={generateGroupAuthor}
+          onGenerateTitle={generateGroupTitle}
+          onToggleGroupMood={toggleGroupMood}
+          onSkip={skipGroup}
+          onApply={applyGroup}
+        />
       )}
 
       {showModal && (
-        <div className="modal-overlay" onClick={() => setShowModal(false)}>
-          <div className="modal-content browser-modal" onClick={(e) => e.stopPropagation()}>
-            <h2><FolderIcon size={18} /> Sélectionner un répertoire</h2>
-
-            <form className="browse-path-form" onSubmit={handlePathSubmit}>
-              <input
-                className="browse-path-input"
-                value={pathInput}
-                onChange={(e) => setPathInput(e.target.value)}
-                spellCheck={false}
-              />
-              <button type="submit" className="browse-go-btn">Aller</button>
-            </form>
-
-            {browseError && <div className="browse-error"><WarnIcon /> {browseError}</div>}
-
-            <div className="browse-body">
-              <div className="browse-shortcuts">
-                {(['local', 'removable', 'network', 'mount'] as const).map((group) => {
-                  const items = shortcuts.filter(s => s.group === group);
-                  if (items.length === 0) return null;
-                  return (
-                    <div key={group} className="shortcut-group">
-                      <div className="shortcut-group-label">
-                        {group === 'local' && 'Local'}
-                        {group === 'removable' && 'Clés USB'}
-                        {group === 'network' && 'Réseau'}
-                        {group === 'mount' && 'Montages'}
-                      </div>
-                      {items.map((sc) => (
-                        <button
-                          key={sc.path}
-                          className={`shortcut-item ${browsePath === sc.path ? 'active' : ''}`}
-                          onClick={() => loadBrowsePath(sc.path)}
-                          title={sc.detail ? `${sc.path} (${sc.detail})` : sc.path}
-                        >
-                          {sc.label}
-                        </button>
-                      ))}
-                    </div>
-                  );
-                })}
-              </div>
-
-              <div className="browse-list">
-                {browseParent && browseParent !== browsePath && (
-                  <button className="browse-item browse-up" onClick={() => loadBrowsePath(browseParent)}>
-                    <FolderIcon size={14} /> ..
-                  </button>
-                )}
-                {browseDirs.map((dir) => (
-                  <button
-                    key={dir}
-                    className="browse-item"
-                    onClick={() => loadBrowsePath(`${browsePath}/${dir}`.replace(/\/+/g, '/'))}
-                  >
-                    <FolderIcon size={14} /> {dir}
-                  </button>
-                ))}
-                {browseDirs.length === 0 && !browseError && (
-                  <div className="browse-empty">Aucun sous-répertoire</div>
-                )}
-              </div>
-            </div>
-
-            <div className="modal-actions">
-              <button className="modal-btn-cancel" onClick={() => setShowModal(false)}>
-                Annuler
-              </button>
-              <button className="modal-btn" onClick={() => confirmScan(browsePath)}>
-                Scanner ce dossier
-              </button>
-            </div>
-          </div>
-        </div>
+        <BrowserModal
+          pathInput={pathInput}
+          browseError={browseError}
+          shortcuts={shortcuts}
+          browsePath={browsePath}
+          browseParent={browseParent}
+          browseDirs={browseDirs}
+          onPathInputChange={setPathInput}
+          onSubmit={handlePathSubmit}
+          onLoadPath={loadBrowsePath}
+          onClose={() => setShowModal(false)}
+          onConfirmScan={confirmScan}
+        />
       )}
 
-      {showSurprise && surpriseQueue[surpriseIndex] && (() => {
-        const track = surpriseQueue[surpriseIndex];
-        const lyricsState = getLyricsState(track);
-        return (
-          <div className="modal-overlay">
-            <div className="surprise-modal">
-              <div className="surprise-header">
-                <span>🎲 Surprends-moi</span>
-                <span className="surprise-progress">{surpriseIndex + 1} / {surpriseQueue.length}</span>
-                <button className="surprise-close" onClick={closeSurprise} title="Fermer">✕</button>
-              </div>
+      {showSurprise && surpriseQueue[surpriseIndex] && (
+        <SurpriseModal
+          track={surpriseQueue[surpriseIndex]}
+          index={surpriseIndex}
+          total={surpriseQueue.length}
+          isPlaying={isPlaying}
+          acting={surpriseActing}
+          onTogglePlayPause={togglePlayPause}
+          onRate={rateFile}
+          onClose={closeSurprise}
+          onDecide={surpriseDecide}
+        />
+      )}
 
-              <div className="surprise-card">
-                <div className="surprise-track-name" title={track.path}>{track.name}</div>
-                <div className="surprise-meta">
-                  <span className="meta-item">📅 {formatDate(track.mtime)}</span>
-                  <span className={`meta-item lyrics-${lyricsState}`}>
-                    {lyricsState === 'lyrics' ? <MicIcon size={11} /> : lyricsState === 'instrumental' ? <MicOffIcon size={11} /> : <HelpIcon size={11} />}
-                    {lyricsState === 'lyrics' ? 'Paroles' : lyricsState === 'instrumental' ? 'Instrumental' : 'Paroles inconnues'}
-                  </span>
-                  {track.bpm && <span className="meta-item">🎵 {track.bpm} BPM · {track.key}{track.scale === 'minor' ? 'm' : ''}</span>}
-                </div>
-                <div className="surprise-play-row">
-                  <button className="play-btn" onClick={togglePlayPause} title={isPlaying ? 'Pause' : 'Lecture'}>
-                    {isPlaying ? <PauseIcon /> : <PlayIcon />}
-                  </button>
-                  <StarRating value={track.rating} onChange={(n) => rateFile(track.path, n)} size={16} />
-                </div>
-              </div>
+      {waveformFile && (
+        <WaveformEditorModal
+          file={waveformFile}
+          duration={waveformDuration}
+          trimStart={trimStart}
+          trimEnd={trimEnd}
+          fadeIn={fadeIn}
+          fadeOut={fadeOut}
+          loading={waveformLoading}
+          error={waveformError}
+          image={waveformImage}
+          applying={waveformApplying}
+          isCurrentPlaying={playingFilePath === waveformFile.path}
+          isPlaying={isPlaying}
+          onClose={closeWaveformEditor}
+          onTogglePlayPause={togglePlayPause}
+          onPlay={playFileByPath}
+          onSetTrimStart={setTrimStart}
+          onSetTrimEnd={setTrimEnd}
+          onSetFadeIn={setFadeIn}
+          onSetFadeOut={setFadeOut}
+          onApply={applyAudioEdit}
+        />
+      )}
 
-              <div className="surprise-actions">
-                <button
-                  className="surprise-btn-quarantine"
-                  onClick={() => surpriseDecide('quarantine')}
-                  disabled={surpriseActing}
-                >
-                  <TrashIcon /> Quarantaine
-                </button>
-                <button
-                  className="surprise-btn-keep"
-                  onClick={() => surpriseDecide('keep')}
-                  disabled={surpriseActing}
-                >
-                  <CheckIcon /> Garder
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-
-      {waveformFile && (() => {
-        const newDuration = Math.max(0, waveformDuration - trimStart - trimEnd);
-        const startPct = waveformDuration > 0 ? (trimStart / waveformDuration) * 100 : 0;
-        const endPct = waveformDuration > 0 ? (trimEnd / waveformDuration) * 100 : 0;
-        const fadeInPct = waveformDuration > 0 ? (fadeIn / waveformDuration) * 100 : 0;
-        const fadeOutPct = waveformDuration > 0 ? (fadeOut / waveformDuration) * 100 : 0;
-        const isCurrentPlaying = playingFilePath === waveformFile.path;
-        return (
-          <div className="modal-overlay" onClick={closeWaveformEditor}>
-            <div className="waveform-modal" onClick={(e) => e.stopPropagation()}>
-              <div className="waveform-header">
-                <span title={waveformFile.path}><WaveformIcon size={14} /> {waveformFile.name}</span>
-                <button className="surprise-close" onClick={closeWaveformEditor} title="Fermer">✕</button>
-              </div>
-
-              {waveformLoading ? (
-                <div className="waveform-loading">Génération du sonogramme…</div>
-              ) : waveformError ? (
-                <div className="waveform-error">⚠️ {waveformError}</div>
-              ) : waveformImage ? (
-                <>
-                  <div className="waveform-canvas">
-                    <img src={waveformImage} alt="Sonogramme" draggable={false} />
-                    {startPct > 0 && <div className="waveform-cut waveform-cut-start" style={{ width: `${startPct}%` }} />}
-                    {endPct > 0 && <div className="waveform-cut waveform-cut-end" style={{ width: `${endPct}%` }} />}
-                    {fadeIn > 0 && <div className="waveform-fade waveform-fade-in" style={{ left: `${startPct}%`, width: `${fadeInPct}%` }} />}
-                    {fadeOut > 0 && <div className="waveform-fade waveform-fade-out" style={{ right: `${endPct}%`, width: `${fadeOutPct}%` }} />}
-                  </div>
-
-                  <div className="waveform-play-row">
-                    <button
-                      className="play-btn"
-                      title={isCurrentPlaying && isPlaying ? 'Pause' : 'Écouter'}
-                      onClick={() => isCurrentPlaying ? togglePlayPause() : playFileByPath(waveformFile.path)}
-                    >
-                      {isCurrentPlaying && isPlaying ? <PauseIcon /> : <PlayIcon />}
-                    </button>
-                    <span className="waveform-duration">
-                      {formatTime(newDuration)} <span className="waveform-duration-orig">/ original {formatTime(waveformDuration)}</span>
-                    </span>
-                  </div>
-
-                  <div className="waveform-controls">
-                    <label>
-                      Couper au début (s)
-                      <input
-                        type="number" min={0} step={0.5}
-                        max={Math.max(0, waveformDuration - trimEnd - 0.5)}
-                        value={trimStart}
-                        onChange={(e) => setTrimStart(Math.max(0, Number(e.target.value) || 0))}
-                      />
-                    </label>
-                    <label>
-                      Couper à la fin (s)
-                      <input
-                        type="number" min={0} step={0.5}
-                        max={Math.max(0, waveformDuration - trimStart - 0.5)}
-                        value={trimEnd}
-                        onChange={(e) => setTrimEnd(Math.max(0, Number(e.target.value) || 0))}
-                      />
-                    </label>
-                    <label>
-                      Fade in (s)
-                      <input
-                        type="number" min={0} step={0.5}
-                        max={newDuration}
-                        value={fadeIn}
-                        onChange={(e) => setFadeIn(Math.max(0, Number(e.target.value) || 0))}
-                      />
-                    </label>
-                    <label>
-                      Fade out (s)
-                      <input
-                        type="number" min={0} step={0.5}
-                        max={newDuration}
-                        value={fadeOut}
-                        onChange={(e) => setFadeOut(Math.max(0, Number(e.target.value) || 0))}
-                      />
-                    </label>
-                  </div>
-                </>
-              ) : null}
-
-              <div className="waveform-actions">
-                <button className="modal-btn-cancel" onClick={closeWaveformEditor}>Annuler</button>
-                <button
-                  className="modal-btn"
-                  onClick={applyAudioEdit}
-                  disabled={waveformApplying || !waveformImage || (trimStart === 0 && trimEnd === 0 && fadeIn === 0 && fadeOut === 0)}
-                >
-                  {waveformApplying ? 'Application…' : 'Appliquer (réversible)'}
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-
-      {compareFiles && (() => {
-        const [fileA, fileB] = compareFiles;
-        const pct = compareDuration ? (compareCurrentTime / compareDuration) * 100 : 0;
-        return (
-          <div className="modal-overlay" onClick={closeCompare}>
-            <div className="compare-modal" onClick={(e) => e.stopPropagation()}>
-              <div className="waveform-header">
-                <span>🎧 Comparaison A/B stéréo</span>
-                <div className="compare-header-actions">
-                  <button
-                    className={`diff-toggle-btn ${diffView ? 'active' : ''}`}
-                    onClick={() => setDiffView(p => !p)}
-                    title="Superposer les deux sonogrammes calés sur t=0 pour repérer une intro coupée, un outro en plus ou une durée différente"
-                  >
-                    🔍 Vue diff
-                  </button>
-                  <button className="surprise-close" onClick={closeCompare} title="Fermer">✕</button>
-                </div>
-              </div>
-
-              {diffView && (
-                <div className="diff-section">
-                  {diffLoading ? (
-                    <div className="empty-state small"><WaveIcon size={16} /><p>Génération des sonogrammes alignés…</p></div>
-                  ) : diffData ? (
-                    <>
-                      <div className="diff-overlay">
-                        <img
-                          className="diff-layer"
-                          src={diffData.a.image}
-                          style={{ width: `${(diffData.a.width / diffData.totalWidth) * 100}%` }}
-                          alt=""
-                          draggable={false}
-                        />
-                        <img
-                          className="diff-layer"
-                          src={diffData.b.image}
-                          style={{ width: `${(diffData.b.width / diffData.totalWidth) * 100}%` }}
-                          alt=""
-                          draggable={false}
-                        />
-                      </div>
-                      <div className="diff-legend">
-                        <span className="diff-legend-item a">■ A seul ({formatTime(diffData.a.duration)})</span>
-                        <span className="diff-legend-item both">■ Les deux se recouvrent</span>
-                        <span className="diff-legend-item b">■ B seul ({formatTime(diffData.b.duration)})</span>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="empty-state small"><WarnIcon size={16} /><p>Sonogrammes indisponibles</p></div>
-                  )}
-                </div>
-              )}
-
-              <div className="compare-split">
-                <div className="compare-side">
-                  <div className="compare-side-head">
-                    <span className="compare-channel-label">⬅ Canal gauche</span>
-                    <button className={`compare-mute-btn ${muteLeft ? 'active' : ''}`} onClick={toggleMuteLeft} title={muteLeft ? 'Réactiver le canal gauche' : 'Couper le canal gauche'}>
-                      {muteLeft ? '🔇' : '🔊'}
-                    </button>
-                  </div>
-                  <span className="compare-filename" title={fileA.name}>{fileA.name}</span>
-                  <div className="compare-mini-waveform">
-                    {compareWaveformA ? <img src={compareWaveformA} alt="" draggable={false} /> : <div className="scrubber-waveform-placeholder" />}
-                    <div className="scrubber-head" style={{ left: `${pct}%` }} />
-                  </div>
-                </div>
-                <div className="compare-side">
-                  <div className="compare-side-head">
-                    <span className="compare-channel-label">Canal droit ➡</span>
-                    <button className={`compare-mute-btn ${muteRight ? 'active' : ''}`} onClick={toggleMuteRight} title={muteRight ? 'Réactiver le canal droit' : 'Couper le canal droit'}>
-                      {muteRight ? '🔇' : '🔊'}
-                    </button>
-                  </div>
-                  <span className="compare-filename" title={fileB.name}>{fileB.name}</span>
-                  <div className="compare-mini-waveform">
-                    {compareWaveformB ? <img src={compareWaveformB} alt="" draggable={false} /> : <div className="scrubber-waveform-placeholder" />}
-                    <div className="scrubber-head" style={{ left: `${pct}%` }} />
-                  </div>
-                </div>
-              </div>
-
-              <div className="compare-controls">
-                <button className="control-btn primary" onClick={toggleComparePlay}>
-                  {comparePlaying ? <PauseIcon /> : <PlayIcon />}
-                </button>
-                <div className="scrubber-track compare-scrubber" onClick={handleCompareScrub}>
-                  <div className="scrubber-progress" style={{ width: `${pct}%` }} />
-                  <div className="scrubber-head" style={{ left: `${pct}%` }} />
-                </div>
-                <span className="player-scrubber-times compare-times">
-                  <span>{formatTime(compareCurrentTime)}</span>
-                  <span>{formatTime(compareDuration)}</span>
-                </span>
-              </div>
-
-              <div className="compare-crossfader">
-                <span className="crossfader-label">A</span>
-                <input
-                  type="range"
-                  className="crossfader-slider"
-                  min={-1}
-                  max={1}
-                  step={0.01}
-                  value={compareBalance}
-                  onChange={(e) => handleCompareBalance(Number(e.target.value))}
-                  title="Balance A/B façon crossfader DJ"
-                />
-                <span className="crossfader-label">B</span>
-              </div>
-
-              <audio ref={compareAudioARef} src={`${API}/stream/${toBase64Url(fileA.path)}`} />
-              <audio ref={compareAudioBRef} src={`${API}/stream/${toBase64Url(fileB.path)}`} />
-            </div>
-          </div>
-        );
-      })()}
+      {compareFiles && (
+        <CompareModal
+          fileA={compareFiles[0]}
+          fileB={compareFiles[1]}
+          diffView={diffView}
+          diffLoading={diffLoading}
+          diffData={diffData}
+          muteLeft={muteLeft}
+          muteRight={muteRight}
+          compareWaveformA={compareWaveformA}
+          compareWaveformB={compareWaveformB}
+          compareCurrentTime={compareCurrentTime}
+          compareDuration={compareDuration}
+          comparePlaying={comparePlaying}
+          compareBalance={compareBalance}
+          audioARef={compareAudioARef}
+          audioBRef={compareAudioBRef}
+          onClose={closeCompare}
+          onToggleDiffView={() => setDiffView(p => !p)}
+          onToggleMuteLeft={toggleMuteLeft}
+          onToggleMuteRight={toggleMuteRight}
+          onTogglePlay={toggleComparePlay}
+          onScrub={handleCompareScrub}
+          onBalanceChange={handleCompareBalance}
+        />
+      )}
 
       {infoFilePath && (() => {
         const file = findFileByPath(infoFilePath);
         if (!file) { closeInfo(); return null; }
-        const lyricsState = getLyricsState(file);
-        const isAnalyzing = analyzingPaths.has(file.path);
         return (
-          <div className="modal-overlay" onClick={closeInfo}>
-            <div className="info-modal" onClick={(e) => e.stopPropagation()}>
-              <div className="info-header">
-                <span title={file.path}><HelpIcon size={14} /> {file.name}</span>
-                <div className="info-header-actions">
-                  <button className="play-btn" onClick={() => playFileByPath(file.path)} title="Écouter">
-                    <PlayIcon />
-                  </button>
-                  <button className="waveform-btn" onClick={() => { closeInfo(); openWaveformEditor(file); }} title="Sonogramme — trim / fade">
-                    <WaveformIcon />
-                  </button>
-                  <button className="surprise-close" onClick={closeInfo} title="Fermer">✕</button>
-                </div>
-              </div>
-
-              <div className="info-body">
-                <div className="info-row">
-                  <span className="info-label">Chemin</span>
-                  <span className="info-value info-path" title={file.path}>{file.path}</span>
-                </div>
-                <div className="info-row">
-                  <span className="info-label">Date de création</span>
-                  <span className="info-value">{formatDate(file.mtime)}</span>
-                </div>
-                <div className="info-row">
-                  <span className="info-label">Taille</span>
-                  <span className="info-value">{(file.size / 1024 / 1024).toFixed(1)} MB</span>
-                </div>
-                <div className="info-row">
-                  <span className="info-label">Note</span>
-                  <span className="info-value">
-                    <StarRating value={file.rating} onChange={(n) => rateFile(file.path, n)} size={14} />
-                  </span>
-                </div>
-                <div className="info-row">
-                  <span className="info-label">BPM / Tonalité</span>
-                  <span className="info-value">
-                    {file.bpm ? (
-                      `${file.bpm} BPM · ${file.key}${file.scale === 'minor' ? 'm' : ''}`
-                    ) : (
-                      <button className="meta-analyze-btn" onClick={() => analyzeAudio(file.path)} disabled={isAnalyzing}>
-                        {isAnalyzing ? '…analyse' : '🎵 Analyser BPM/tonalité'}
-                      </button>
-                    )}
-                  </span>
-                </div>
-
-                <div className="info-lyrics-section">
-                  <div className="info-label">
-                    {lyricsState === 'lyrics' ? <MicIcon size={12} /> : lyricsState === 'instrumental' ? <MicOffIcon size={12} /> : <HelpIcon size={12} />}
-                    {' '}Paroles
-                    {lyricsState === 'instrumental' && ' — instrumental'}
-                    {lyricsState === 'unknown' && ' — pas encore analysé (étape Paroles non passée sur ce fichier)'}
-                  </div>
-                  {lyricsState === 'lyrics' ? (
-                    <div className="info-lyrics-text">{file.lyrics}</div>
-                  ) : (
-                    <div className="info-lyrics-empty">
-                      {lyricsState === 'instrumental' ? 'Aucune parole détectée sur ce morceau.' : 'Ce fichier n\'a pas encore été passé au crible de la transcription (étape Paroles du scan).'}
-                    </div>
-                  )}
-                  {lyricsState !== 'lyrics' && (
-                    <button
-                      className="meta-analyze-btn"
-                      onClick={() => rescanLyrics(file.path, 30)}
-                      disabled={rescanningLyricsPaths.has(file.path)}
-                      title="Relancer la transcription plus loin dans le morceau (utile si l'intro est longue)"
-                    >
-                      {rescanningLyricsPaths.has(file.path) ? '…transcription' : '🎤 Réessayer (intro longue)'}
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              <div className="surprise-actions">
-                <button
-                  className="surprise-btn-quarantine"
-                  onClick={() => { closeInfo(); quickQuarantine([file.path]); }}
-                  title="Mettre en quarantaine"
-                >
-                  <TrashIcon /> Quarantaine
-                </button>
-                <button
-                  className="surprise-btn-keep"
-                  onClick={closeInfo}
-                  title="Garder — fermer sans action"
-                >
-                  <CheckIcon /> Garder
-                </button>
-              </div>
-            </div>
-          </div>
+          <InfoPanelModal
+            file={file}
+            isAnalyzing={analyzingPaths.has(file.path)}
+            isRescanningLyrics={rescanningLyricsPaths.has(file.path)}
+            onClose={closeInfo}
+            onPlay={playFileByPath}
+            onOpenWaveformEditor={openWaveformEditor}
+            onRate={rateFile}
+            onAnalyzeAudio={analyzeAudio}
+            onRescanLyrics={rescanLyrics}
+            onQuickQuarantine={quickQuarantine}
+          />
         );
       })()}
 
-      {showHelp && (
-        <div className="modal-overlay" onClick={() => setShowHelp(false)}>
-          <div className="help-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="waveform-header">
-              <span><HelpIcon size={14} /> Raccourcis clavier</span>
-              <button className="surprise-close" onClick={() => setShowHelp(false)} title="Fermer">✕</button>
-            </div>
-            <div className="help-body">
-              <div className="help-section">
-                <div className="help-section-title">Note & fiche morceau</div>
-                <div className="help-row"><kbd>0</kbd>–<kbd>5</kbd><span>Noter le morceau en cours (0 = effacer)</span></div>
-                <div className="help-row"><kbd>I</kbd><span>Ouvrir la fiche info (paroles, bpm, tonalité...)</span></div>
-              </div>
-              <div className="help-section">
-                <div className="help-section-title">Décision garder / quarantaine</div>
-                <div className="help-row"><kbd>G</kbd><span>ou</span><kbd>K</kbd><span>Garder</span></div>
-                <div className="help-row"><kbd>X</kbd><span>ou</span><kbd>Q</kbd><span>Mettre en quarantaine</span></div>
-              </div>
-              <div className="help-section">
-                <div className="help-section-title">Lecture</div>
-                <div className="help-row"><kbd>Espace</kbd><span>Lecture / pause</span></div>
-                <div className="help-row"><kbd>←</kbd><span>Reculer de 10s</span></div>
-                <div className="help-row"><kbd>→</kbd><span>Avancer de 10s</span></div>
-                <div className="help-row"><kbd>↑</kbd><span>Morceau précédent</span></div>
-                <div className="help-row"><kbd>↓</kbd><span>Morceau suivant</span></div>
-              </div>
-              <div className="help-section">
-                <div className="help-section-title">Navigation</div>
-                <div className="help-row"><kbd>Page ↑</kbd><span>Remonter dans la liste</span></div>
-                <div className="help-row"><kbd>Page ↓</kbd><span>Descendre dans la liste</span></div>
-                <div className="help-row"><kbd>Échap</kbd><span>Fermer le panneau ouvert</span></div>
-                <div className="help-row"><kbd>?</kbd><span>Afficher/masquer cette aide</span></div>
-              </div>
-            </div>
-            <div className="help-footer">
-              Inactifs quand le focus est dans un champ de saisie. Le morceau ciblé par note/info/garder/quarantaine
-              est celui en cours de lecture (ou du tirage Surprends-moi / de la fiche info ouverte).
-            </div>
-          </div>
-        </div>
-      )}
+      {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
     </div>
-  );
-}
-
-/* --- Icônes SVG monochromes (héritent currentColor) --- */
-
-function ScaleIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 3v18M5 21h14M5 7l-3 6a3 3 0 0 0 6 0l-3-6ZM19 7l-3 6a3 3 0 0 0 6 0l-3-6ZM5 7h14" />
-      <path d="M12 3l7 4M12 3 5 7" />
-    </svg>
-  );
-}
-
-function LayersIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="m12 2 9 5-9 5-9-5 9-5Z" /><path d="m3 12 9 5 9-5" /><path d="m3 17 9 5 9-5" />
-    </svg>
-  );
-}
-
-function RulerIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M21.3 8.7 15.3 2.7a1 1 0 0 0-1.4 0L2.7 13.9a1 1 0 0 0 0 1.4l6 6a1 1 0 0 0 1.4 0L21.3 10.1a1 1 0 0 0 0-1.4Z" />
-      <path d="m14.5 8.5 1 1M11.5 11.5l1 1M8.5 14.5l1 1" />
-    </svg>
-  );
-}
-
-function TextIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 7V4h16v3M9 20h6M12 4v16" />
-    </svg>
-  );
-}
-
-function WaveIcon({ size = 16 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M2 12h2l2-7 3 15 3-11 2 5h2M18 12h4" />
-    </svg>
-  );
-}
-
-function MicIcon({ size = 16 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-      <path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4M8 22h8" />
-    </svg>
-  );
-}
-
-function MicOffIcon({ size = 16 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M1 1l22 22M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V5a3 3 0 0 0-5.94-.6" />
-      <path d="M19 10v1a7 7 0 0 1-1.11 3.79M5 10v1a7 7 0 0 0 7 7c.68 0 1.33-.09 1.95-.26M12 18v4M8 22h8" />
-    </svg>
-  );
-}
-
-function HelpIcon({ size = 16 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="10" />
-      <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01" />
-    </svg>
-  );
-}
-
-function TagIcon({ size = 14 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 2H3v9l10.29 10.3a1 1 0 0 0 1.42 0l7.29-7.3a1 1 0 0 0 0-1.4L12 2Z" />
-      <circle cx="7.5" cy="7.5" r="1.5" />
-    </svg>
-  );
-}
-
-function SparkleIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 2l1.6 5.4L19 9l-5.4 1.6L12 16l-1.6-5.4L5 9l5.4-1.6L12 2Z" />
-      <path d="M19 15l.7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7L19 15Z" opacity="0.6" />
-    </svg>
-  );
-}
-
-function FolderIcon({ size = 16 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
-    </svg>
-  );
-}
-
-function PlayIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M8 5v14l11-7L8 5Z" />
-    </svg>
-  );
-}
-
-function PauseIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M7 5h3v14H7zM14 5h3v14h-3z" />
-    </svg>
-  );
-}
-
-function WaveformIcon({ size = 13 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M2 12h2M6 8v8M10 5v14M14 8v8M18 10v4M22 12h-2" />
-    </svg>
-  );
-}
-
-function PrevIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M6 6h2v12H6zM20 6v12L9 12l11-6Z" />
-    </svg>
-  );
-}
-
-function NextIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M16 6h2v12h-2zM4 6v12l11-6L4 6Z" />
-    </svg>
-  );
-}
-
-function VolumeIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M11 5 6 9H2v6h4l5 4V5ZM19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
-    </svg>
-  );
-}
-
-function LinkIcon({ size = 14 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-    </svg>
-  );
-}
-
-function EditIcon({ size = 13 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-      <path d="M15 5l4 4" />
-    </svg>
-  );
-}
-
-function NavidromeIcon({ size = 12 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10Z" />
-    </svg>
-  );
-}
-
-function XIcon({ size = 12 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M18 6 6 18M6 6l12 12" />
-    </svg>
-  );
-}
-
-function TrashIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6h16Z" />
-    </svg>
-  );
-}
-
-function UndoIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11" />
-    </svg>
-  );
-}
-
-function CheckIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M20 6 9 17l-5-5" />
-    </svg>
-  );
-}
-
-function WarnIcon({ size = 14 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
-      <path d="M12 9v4M12 17h.01" />
-    </svg>
   );
 }
 
