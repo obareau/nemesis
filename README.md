@@ -176,6 +176,19 @@ node server.js
 ```
 → `http://localhost:5693`
 
+## Tests
+
+```bash
+npm test
+```
+
+Deux niveaux : tests unitaires sur la logique de détection pure (`server/analysis.test.js` —
+Levenshtein, fuzzy match, similarité d'empreinte/paroles, clustering union-find) et un parcours
+E2E (`test/e2e.test.js`) qui lance le vrai process `node server.js` sur un dossier temporaire
+avec de vrais MP3 générés via ffmpeg — scan, détection de doublons, quarantaine/undo,
+renommage/undo, cycle de projet. Aucun mock : `fpcalc`/`ffmpeg` doivent être installés
+(voir Installation ci-dessous).
+
 ## API (aperçu)
 
 | Route | Description |
@@ -226,8 +239,8 @@ Un watchdog (timer systemd + `GET /api/status`) est recommandé pour redémarrer
 
 - [ ] Support d'autres formats (FLAC, WAV, OGG)
 - [ ] Export ZIP des résultats
-- [ ] Tests E2E
-- [ ] Parallélisation fingerprint (pool de workers `fpcalc`)
+- [x] Tests E2E
+- [x] Parallélisation fingerprint (pool de workers `fpcalc`)
 
 ## Licence
 
