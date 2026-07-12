@@ -20,6 +20,9 @@ Trier des centaines/milliers de MP3 à la main pour trouver les doublons — vra
 
 Chaque étape alimente aussi une vue **"Morceaux similaires"** avec seuil ajustable (80-95% par défaut), indépendante des seuils de clustering stricts.
 
+### Score de confiance par groupe
+Chaque groupe de doublons affiche un score de confiance (similarité de détection + concordance BPM/tonalité quand les deux fichiers sont analysés — concordant renforce, discordant affaiblit) pour prioriser les groupes les plus évidents plutôt que de traiter les 50+ groupes dans l'ordre du scan. Triable en un clic dans le panneau.
+
 ### Le groupe comme unité de travail
 Cliquer un groupe de doublons ouvre un panneau unique : écoute inline, note 0-5 étoiles par fichier, cases garder/écarter, renommage (auteur fictif + titre depuis les paroles) et envoi vers Navidrome (mood + détection "déjà présent" → playlist Covers) — le tout dépilé en un clic "Appliquer".
 
@@ -36,10 +39,34 @@ Pas de picker OS : navigation qui détecte dynamiquement (via `/proc/mounts`) le
 Vue waveform (ffmpeg `showwavespic`) par fichier avec découpe du début/de la fin et fade in/out — réécrit le MP3 en place via ffmpeg, mais l'original est toujours sauvegardé à côté pour un undo complet.
 
 ### Fiche info complète
-Nom, date de création, taille, note, BPM + tonalité (Essentia, calculé à la demande — trop lent pour tourner sur des centaines de fichiers en masse) et **texte intégral des paroles transcrites**.
+Nom, date de création, taille, note, BPM + tonalité (Essentia, calculé à la demande ou en masse via un bouton dédié) et **texte intégral des paroles transcrites**, avec possibilité de relancer la transcription à un offset différent (utile pour les morceaux à intro longue). Le BPM/tonalité est aussi écrit directement dans les tags ID3 (`TBPM`/`TKEY`) du fichier, pas seulement dans l'état de l'app.
+
+### Colonnes triables, filtre par note, compteur d'écoutes
+Colonnes Nom/BPM/Note/Taille triables en un clic. Filtre par note (0-5 étoiles, plusieurs actives à la fois) façon filmstrip Lightroom dans la barre de lecture. Chaque lecture incrémente un compteur d'écoutes affiché à côté de la fiche info — repère d'un coup d'œil les morceaux jamais écoutés.
+
+### Sélection multiple façon Explorer/Finder
+Clic = sélection exclusive, `Ctrl`/`Cmd`+clic = ajout/retrait individuel, `Maj`+clic = plage contiguë depuis le dernier fichier cliqué.
+
+### Renommage rapide d'un seul fichier
+Renommage inline (icône crayon sur la ligne) sans passer par le flux auteur/titre en masse — pour corriger un nom isolé sans configurer tout le panneau Renommage.
+
+### Peintre (façon outil Painter de Lightroom)
+Configure un ou plusieurs moods, une note et/ou un couple auteur+titre dans la barre du panneau, puis clique-glisse sur plusieurs fichiers pour les leur appliquer directement, sans repasser par le formulaire à chaque fichier.
+
+### Panneau mood
+Double-clic sur un mood dans la barre latérale ouvre son contenu réel, lu depuis la playlist Navidrome correspondante (pas une estimation locale) — avec une zone de dépôt pour glisser des fichiers dessus et les taguer localement en attendant l'envoi explicite.
+
+### Sonogramme permanent dans la barre de lecture
+Le sonogramme du morceau en cours est toujours visible en bas d'écran, avec une tête de lecture cliquable/glissable pour naviguer directement dedans. Les sonogrammes de tous les fichiers sont pré-générés en tâche de fond après chaque scan ou reprise de projet, pour un affichage instantané plutôt qu'un calcul ffmpeg à la demande.
+
+### Comparateur A/B stéréo
+Sélectionne deux fichiers pour les comparer à l'oreille : lecture synchronisée, un fichier exclusivement sur le canal gauche et l'autre sur le droit, mute indépendant par canal, crossfader façon table de mix DJ pour doser l'équilibre entre les deux. Une vue "diff" superpose les deux sonogrammes calés sur t=0 à la même échelle px/seconde pour repérer d'un coup d'œil une intro coupée, un outro en plus ou une durée différente, sans corrélation audio complexe.
+
+### Historique d'annulation multi-niveaux
+Au-delà du simple "annuler la dernière action" : un panneau liste l'historique complet des actions journalisées et permet d'annuler en rafale jusqu'à un point donné, pas seulement la toute dernière.
 
 ### Mode "Surprends-moi"
-10 morceaux au hasard, écoute + décision garder/quarantaine à la volée façon Tinder.
+10 morceaux au hasard — priorité aux jamais-écoutés (via le compteur d'écoutes), complète avec le reste si moins de 10 inédits restent —, écoute + décision garder/quarantaine à la volée façon Tinder.
 
 ### Raccourcis clavier (façon Lightroom)
 `0`-`5` note · `I` fiche info · `G`/`K` garder · `X`/`Q` quarantaine · `Espace` lecture/pause · `←`/`→` -10s/+10s · `↑`/`↓` morceau précédent/suivant · `Page ↑`/`Page ↓` navigue la liste · `Échap` ferme le panneau ouvert · `?` affiche l'aide. Liste complète accessible depuis le bouton **Aide** de l'interface.
@@ -136,15 +163,21 @@ node server.js
 | `GET /api/status` | État courant (polling temps réel) |
 | `GET /api/projects` · `POST /api/projects/close` · `.../reopen` · `DELETE /api/projects` | Gestion des projets persistants |
 | `POST /api/groups/skip` | Marque un groupe comme traité |
-| `POST /api/undo` | Annule la dernière action journalisée |
+| `POST /api/undo` | Annule la dernière action journalisée (appelable en rafale pour remonter l'historique) |
 | `POST /api/rename-bulk` | Renommage + tag ID3 en masse |
+| `POST /api/rename-file` | Renommage simple d'un seul fichier |
 | `POST /api/navidrome/push` | Envoi vers playlist(s) mood Navidrome |
+| `GET /api/navidrome/mood/:mood` | Contenu réel d'une playlist mood Navidrome (pour le panneau mood) |
+| `POST /api/tag-mood` | Tag/untag local d'un mood sur un ou plusieurs fichiers (peintre, glisser-déposer) |
 | `POST /api/quarantine` · `GET /api/quarantine` · `.../restore` · `.../empty` | Corbeille réversible + suppression physique confirmée |
 | `GET /api/stream/:encodedPath` | Streaming MP3 avec support HTTP Range (206) |
 | `POST /api/rating` | Note 0-5 étoiles |
-| `POST /api/analyze-audio` | BPM/tonalité à la demande (Essentia, mis en cache) |
-| `GET /api/waveform/:encodedPath` | Sonogramme PNG (mis en cache) |
+| `POST /api/play-count` | Incrémente le compteur d'écoutes d'un fichier |
+| `POST /api/analyze-audio` | BPM/tonalité à la demande ou en masse (Essentia, mis en cache, écrit aussi en tags ID3) |
+| `GET /api/waveform/:encodedPath` | Sonogramme PNG (mis en cache, pré-généré après scan) |
+| `GET /api/waveform-diff` | Sonogrammes de deux fichiers alignés dans le temps pour comparaison visuelle A/B |
 | `POST /api/audio-edit` | Trim + fade in/out (réversible) |
+| `POST /api/lyrics-rescan` | Relance la transcription des paroles à un offset donné (bypass cache) |
 | `GET /api/moods` | Liste des 17 moods canoniques |
 
 ## Déploiement (exemple systemd)
