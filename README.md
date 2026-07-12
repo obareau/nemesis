@@ -80,6 +80,12 @@ Push direct vers les playlists mood (taxonomie à 17 moods) avec détection des 
 |---|---|
 | ![Vue groupe](docs/screenshots/02-group-modal.png) Panneau de groupe — écoute, note, garder/écarter, renommage, Navidrome | ![Sonogramme](docs/screenshots/04-waveform.png) Sonogramme — trim & fade |
 | ![Fiche info](docs/screenshots/03-info-panel.png) Fiche info — paroles complètes, bpm, tonalité | ![Surprends-moi](docs/screenshots/05-surprise.png) Mode Surprends-moi |
+| ![Peintre](docs/screenshots/07-painter.png) Peintre (façon Lightroom) + score de confiance des doublons | ![Panneau mood](docs/screenshots/08-mood-panel.png) Panneau mood — contenu Navidrome réel + glisser-déposer |
+| ![Comparateur A/B](docs/screenshots/09-compare-ab.png) Comparateur A/B stéréo — mute par canal, crossfader DJ | ![Vue diff](docs/screenshots/10-compare-diff.png) Comparateur A/B — vue diff des sonogrammes alignés |
+
+Historique d'annulation multi-niveaux, sélection multiple et colonnes triables :
+
+![Historique d'annulation](docs/screenshots/11-undo-history.png)
 
 Aide et raccourcis clavier :
 
