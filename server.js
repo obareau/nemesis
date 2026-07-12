@@ -924,6 +924,7 @@ app.post('/api/scan', express.json(), async (req, res) => {
       analysisState.totalProgress = 100;
       analysisState.currentStage = null;
       persistProject();
+      warmWaveformCache(analysisState.files, myGeneration).catch(() => {});
     }, 100);
 
     res.json(analysisState);
@@ -941,6 +942,8 @@ app.get('/api/status', (req, res) => {
     ...analysisState,
     processedGroups,
     actionCount: actionLog.length,
+    // Historique léger (sans les snapshots de données) pour le panneau d'annulation multi-niveaux
+    actionLog: actionLog.map(a => ({ id: a.id, type: a.type, description: a.description, timestamp: a.timestamp })),
     projectStatus: projectRecord?.status || (analysisState.dirPath ? 'active' : null)
   });
 });
@@ -1072,6 +1075,66 @@ app.post('/api/rating', express.json(), (req, res) => {
   res.json({ success: true, rating });
 });
 
+// API: Incrémente le compteur d'écoutes d'un fichier — appelé une fois par sélection de lecture
+// (pas par event 'play' du <audio>, pour ne pas recompter une pause/reprise du même morceau).
+app.post('/api/play-count', express.json(), (req, res) => {
+  const { filePath } = req.body;
+  if (!filePath) {
+    return res.status(400).json({ error: 'filePath requis' });
+  }
+
+  let playCount = null;
+  const applyPlay = (f) => {
+    if (f && f.path === filePath) { f.playCount = (f.playCount || 0) + 1; playCount = f.playCount; }
+  };
+
+  analysisState.files.forEach(applyPlay);
+  for (const dup of analysisState.duplicates) dup.files.forEach(applyPlay);
+  for (const pair of analysisState.similarPairs) {
+    applyPlay(pair.fileA);
+    applyPlay(pair.fileB);
+  }
+
+  if (playCount === null) {
+    return res.status(404).json({ error: 'Fichier introuvable dans le projet courant' });
+  }
+
+  persistProject();
+  res.json({ success: true, playCount });
+});
+
+// API: Tag/untag local d'un mood sur un ou plusieurs fichiers (glisser-déposer sur le panneau mood) —
+// n'appelle PAS Navidrome, juste une étiquette locale en attendant le push explicite.
+app.post('/api/tag-mood', express.json(), (req, res) => {
+  const { filePaths, mood, action = 'add' } = req.body;
+  if (!Array.isArray(filePaths) || filePaths.length === 0 || !mood) {
+    return res.status(400).json({ error: 'filePaths (array non vide) et mood requis' });
+  }
+
+  let updated = 0;
+  const applyTag = (f) => {
+    if (!f || !filePaths.includes(f.path)) return;
+    const moods = new Set(f.moods || []);
+    if (action === 'remove') moods.delete(mood); else moods.add(mood);
+    f.moods = Array.from(moods);
+    updated++;
+  };
+
+  analysisState.files.forEach(applyTag);
+  for (const dup of analysisState.duplicates) dup.files.forEach(applyTag);
+  for (const pair of analysisState.similarPairs) {
+    applyTag(pair.fileA);
+    applyTag(pair.fileB);
+  }
+
+  if (updated === 0) {
+    return res.status(404).json({ error: 'Aucun fichier trouvé dans le projet courant' });
+  }
+
+  persistProject();
+  res.json({ success: true, mood, action, updated });
+});
+
 // API: BPM + tonalité à la demande (Essentia, ~6-9s si pas en cache).
 // Jamais dans le pipeline de scan en masse — bien trop lent pour des centaines
 // de fichiers. Calculé seulement quand l'utilisateur consulte ce fichier précis.
@@ -1100,6 +1163,11 @@ app.post('/api/analyze-audio', express.json(), async (req, res) => {
 
   setCachedAnalysis(fileEntry, result);
   applyAudioFeatures(filePath, result);
+  try {
+    NodeID3.update({ bpm: String(Math.round(result.bpm)), initialKey: `${result.key}${result.scale === 'minor' ? 'm' : ''}` }, filePath);
+  } catch {
+    // tag ID3 échoué (fichier verrouillé/lecture seule) — pas bloquant, la valeur reste en cache app
+  }
   persistProject();
   res.json({ success: true, ...result, cached: false });
 });
@@ -1107,6 +1175,15 @@ app.post('/api/analyze-audio', express.json(), async (req, res) => {
 function applyAudioFeatures(filePath, { bpm, key, scale }) {
   const apply = (f) => {
     if (f && f.path === filePath) { f.bpm = bpm; f.key = key; f.scale = scale; }
+  };
+  analysisState.files.forEach(apply);
+  for (const dup of analysisState.duplicates) dup.files.forEach(apply);
+  for (const pair of analysisState.similarPairs) { apply(pair.fileA); apply(pair.fileB); }
+}
+
+function applyNavidromePushed(filePath, pushedToNavidrome) {
+  const apply = (f) => {
+    if (f && f.path === filePath) f.pushedToNavidrome = pushedToNavidrome;
   };
   analysisState.files.forEach(apply);
   for (const dup of analysisState.duplicates) dup.files.forEach(apply);
@@ -1146,6 +1223,40 @@ app.post('/api/lyrics-rescan', express.json(), async (req, res) => {
   }
 });
 
+function waveformCachePathFor(filePath) {
+  const stat = fs.statSync(filePath);
+  const cacheKey = Buffer.from(`${filePath}:${stat.size}:${Math.floor(stat.mtimeMs)}`).toString('base64url');
+  return path.join(WAVEFORM_CACHE_DIR, `${cacheKey}.png`);
+}
+
+// Pré-génère les sonogrammes de tous les fichiers du scan en tâche de fond, à faible
+// concurrence, pour que le scrubber/peintre/comparaison A-B les affichent instantanément
+// plutôt que d'attendre un premier appel ffmpeg à la demande. Abandonne si un nouveau scan démarre.
+async function warmWaveformCache(files, generation) {
+  fs.mkdirSync(WAVEFORM_CACHE_DIR, { recursive: true });
+  let idx = 0;
+  const concurrency = 3;
+  async function worker() {
+    while (idx < files.length) {
+      if (scanGeneration !== generation) return;
+      const file = files[idx++];
+      try {
+        const cachePath = waveformCachePathFor(file.path);
+        if (!fs.existsSync(cachePath)) {
+          await runFfmpeg([
+            '-y', '-i', file.path,
+            '-filter_complex', 'showwavespic=s=1200x140:colors=0x7b2cbf',
+            '-frames:v', '1', cachePath
+          ]);
+        }
+      } catch {
+        // fichier illisible/corrompu — pas bloquant, le sonogramme sera régénéré à la demande
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: concurrency }, worker));
+}
+
 // API: Sonogramme (waveform PNG) d'un fichier, mis en cache disque par chemin+taille+mtime.
 // Retourne aussi la durée (ffprobe) pour que le frontend positionne les poignées de trim.
 app.get('/api/waveform/:encodedPath', async (req, res) => {
@@ -1162,13 +1273,11 @@ app.get('/api/waveform/:encodedPath', async (req, res) => {
   }
 
   try {
-    const stat = fs.statSync(filePath);
-    const cacheKey = Buffer.from(`${filePath}:${stat.size}:${Math.floor(stat.mtimeMs)}`).toString('base64url');
-    const cachePath = path.join(WAVEFORM_CACHE_DIR, `${cacheKey}.png`);
-
+    const cachePath = waveformCachePathFor(filePath);
     const duration = await probeDuration(filePath);
 
     if (!fs.existsSync(cachePath)) {
+      fs.mkdirSync(WAVEFORM_CACHE_DIR, { recursive: true });
       await runFfmpeg([
         '-y', '-i', filePath,
         '-filter_complex', 'showwavespic=s=1200x140:colors=0x7b2cbf',
@@ -1291,6 +1400,7 @@ app.post('/api/undo', async (req, res) => {
             }
           }
         }
+        if (p.filePath) applyNavidromePushed(p.filePath, false);
       }
     } else if (last.type === 'skip-group') {
       processedGroups = processedGroups.filter(s => s !== last.data.signature);
@@ -1388,6 +1498,63 @@ app.post('/api/rename-bulk', express.json(), (req, res) => {
     failed: failures.length,
     results
   });
+});
+
+// API: Renommage simple d'un seul fichier (juste un nouveau nom, pas d'auteur/tags requis)
+app.post('/api/rename-file', express.json(), (req, res) => {
+  const { filePath, newName } = req.body;
+
+  if (!filePath) {
+    return res.status(400).json({ error: 'filePath requis' });
+  }
+  if (!newName || !newName.trim()) {
+    return res.status(400).json({ error: 'newName requis' });
+  }
+  if (!analysisState.files.some(f => f.path === filePath)) {
+    return res.status(404).json({ error: 'Fichier introuvable dans le projet courant' });
+  }
+
+  try {
+    const dir = path.dirname(filePath);
+    const ext = path.extname(filePath);
+    // Débarrasse le nom saisi de tout séparateur de chemin (pas de traversée de dossier)
+    const cleaned = newName.trim().replace(/[/\\]/g, '-');
+    const base = cleaned.toLowerCase().endsWith(ext.toLowerCase()) ? cleaned.slice(0, -ext.length) : cleaned;
+
+    let finalName = `${base}${ext}`;
+    let newPath = path.join(dir, finalName);
+    let n = 2;
+    while (newPath !== filePath && fs.existsSync(newPath)) {
+      finalName = `${base} (${n})${ext}`;
+      newPath = path.join(dir, finalName);
+      n++;
+    }
+
+    if (newPath !== filePath) {
+      safeMoveSync(filePath, newPath);
+    }
+
+    const fileEntry = analysisState.files.find(f => f.path === filePath);
+    if (fileEntry) {
+      fileEntry.path = newPath;
+      fileEntry.name = finalName;
+    }
+
+    if (newPath !== filePath) {
+      actionLog.push({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        type: 'rename',
+        timestamp: new Date().toISOString(),
+        description: `1 fichier renommé → "${finalName}"`,
+        data: { renames: [{ oldPath: filePath, newPath, oldTags: null }] }
+      });
+      persistProject();
+    }
+
+    res.json({ success: true, newPath, newName: finalName });
+  } catch (err) {
+    res.status(500).json({ error: `Échec renommage: ${err.message}` });
+  }
 });
 
 // API: Génération d'un nom d'artiste fictif via Ollama local
@@ -1527,6 +1694,43 @@ async function ensurePlaylistAndAddSong(moodName, songId) {
   }
 }
 
+// API: Contenu d'une playlist mood Navidrome — pour le panneau "voir ce qui est déjà dans ce mood"
+app.get('/api/navidrome/mood/:mood', async (req, res) => {
+  const { mood } = req.params;
+
+  try {
+    const { playlists } = await subsonicGet('getPlaylists.view');
+    const playlist = (playlists?.playlist || []).find(
+      p => p.name.toLowerCase() === mood.toLowerCase()
+    );
+
+    if (!playlist) {
+      return res.json({ mood, playlistId: null, tracks: [] });
+    }
+
+    const info = await subsonicGet('getPlaylist.view', `&id=${playlist.id}`);
+    const songs = info.playlist?.entry || [];
+
+    const tracks = songs.map(song => {
+      const absolutePath = song.path ? path.join(NAVIDROME_LIBRARY_ROOT, song.path) : null;
+      const localFile = absolutePath ? analysisState.files.find(f => f.path === absolutePath) : null;
+      return {
+        songId: song.id,
+        title: song.title,
+        artist: song.artist,
+        path: absolutePath,
+        knownLocally: !!localFile,
+        rating: localFile?.rating,
+        bpm: localFile?.bpm
+      };
+    });
+
+    res.json({ mood, playlistId: playlist.id, tracks });
+  } catch (err) {
+    res.status(500).json({ error: `Échec lecture playlist Navidrome: ${err.message}` });
+  }
+});
+
 // Vérifie si un morceau équivalent (nom proche, chemin différent) est déjà catalogué
 // dans Navidrome — sert à détecter les doublons déjà présents avant tout ajout aux
 // playlists mood, pour les router vers une playlist "Covers" de mise en attente.
@@ -1589,6 +1793,7 @@ app.post('/api/navidrome/push', express.json(), async (req, res) => {
           const coverResult = await ensurePlaylistAndAddSong(COVERS_PLAYLIST_NAME, songId);
           results.push({
             file: fileName,
+            filePath,
             success: true,
             songId,
             alreadyInLibrary: true,
@@ -1603,20 +1808,22 @@ app.post('/api/navidrome/push', express.json(), async (req, res) => {
           const r = await ensurePlaylistAndAddSong(mood, songId);
           playlistResults.push(r);
         }
-        results.push({ file: fileName, success: true, alreadyInLibrary: false, songId, playlists: playlistResults });
+        results.push({ file: fileName, filePath, success: true, alreadyInLibrary: false, songId, playlists: playlistResults });
       } catch (err) {
-        results.push({ file: fileName, success: false, error: err.message });
+        results.push({ file: fileName, filePath, success: false, error: err.message });
       }
     }
 
     const successResults = results.filter(r => r.success);
     if (successResults.length > 0) {
+      for (const r of successResults) applyNavidromePushed(r.filePath, true);
+
       actionLog.push({
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         type: 'navidrome-push',
         timestamp: new Date().toISOString(),
         description: `${successResults.length} morceau(x) envoyé(s) vers Navidrome`,
-        data: { pushed: successResults.map(r => ({ songId: r.songId, playlists: r.playlists })) }
+        data: { pushed: successResults.map(r => ({ filePath: r.filePath, songId: r.songId, playlists: r.playlists })) }
       });
       persistProject();
     }
@@ -1900,6 +2107,9 @@ function loadMostRecentActiveProject() {
   processedGroups = project.processedGroups || [];
   actionLog = project.actionLog || [];
   console.log(`⚖️  Projet repris automatiquement: ${project.dirPath}`);
+  if (analysisState.files?.length > 0) {
+    warmWaveformCache(analysisState.files, scanGeneration).catch(() => {});
+  }
 }
 
 loadMostRecentActiveProject();

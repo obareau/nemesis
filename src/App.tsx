@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import './App.css';
 
 interface File {
@@ -12,6 +12,19 @@ interface File {
   bpm?: number;
   key?: string;
   scale?: string;
+  pushedToNavidrome?: boolean;
+  moods?: string[];
+  playCount?: number;
+}
+
+interface MoodTrack {
+  songId: string;
+  title: string;
+  artist?: string;
+  path: string | null;
+  knownLocally: boolean;
+  rating?: number;
+  bpm?: number;
 }
 
 type AnalysisMethod = 'size' | 'name' | 'fingerprint' | 'lyrics';
@@ -77,7 +90,15 @@ interface AnalysisState {
   dirPath?: string | null;
   processedGroups?: string[];
   actionCount?: number;
+  actionLog?: ActionLogEntry[];
   resumed?: boolean;
+}
+
+interface ActionLogEntry {
+  id: string;
+  type: string;
+  description: string;
+  timestamp: string;
 }
 
 interface ProjectSummary {
@@ -134,6 +155,14 @@ function StarRating({ value = 0, onChange, size = 13 }: { value?: number; onChan
   );
 }
 
+function StarIcon({ size = 14, filled = false }: { size?: number; filled?: boolean }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round">
+      <path d="m12 2 3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2Z" />
+    </svg>
+  );
+}
+
 function App() {
   const [state, setState] = useState<AnalysisState>({
     status: 'idle',
@@ -165,6 +194,11 @@ function App() {
   const [similarMin, setSimilarMin] = useState(80);
   const [similarMax, setSimilarMax] = useState(95);
   const [showSimilar, setShowSimilar] = useState(false);
+  const [openMood, setOpenMood] = useState<string | null>(null);
+  const [moodPanelTracks, setMoodPanelTracks] = useState<MoodTrack[]>([]);
+  const [moodPanelLoading, setMoodPanelLoading] = useState(false);
+  const [moodDropActive, setMoodDropActive] = useState(false);
+  const [dragOverMood, setDragOverMood] = useState<string | null>(null);
   const [quarantineItems, setQuarantineItems] = useState<QuarantineItem[]>([]);
   const [showQuarantine, setShowQuarantine] = useState(false);
   const [confirmEmptyTrash, setConfirmEmptyTrash] = useState(false);
@@ -181,7 +215,29 @@ function App() {
   const [groupProcessing, setGroupProcessing] = useState(false);
   const [groupNotice, setGroupNotice] = useState<string | null>(null);
   const [analyzingPaths, setAnalyzingPaths] = useState<Set<string>>(new Set());
-const [rescanningLyricsPaths, setRescanningLyricsPaths] = useState<Set<string>>(new Set());
+  const [rescanningLyricsPaths, setRescanningLyricsPaths] = useState<Set<string>>(new Set());
+  const [renamingPath, setRenamingPath] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [renamingBusy, setRenamingBusy] = useState(false);
+  const [sortKey, setSortKey] = useState<'name' | 'bpm' | 'rating' | 'size' | 'plays' | null>(null);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [ratingFilter, setRatingFilter] = useState<Set<number>>(new Set());
+  const [painterMode, setPainterMode] = useState(false);
+  const [painterMoods, setPainterMoods] = useState<Set<string>>(new Set());
+  const [painterRating, setPainterRating] = useState<number | null>(null);
+  const [painterRenameEnabled, setPainterRenameEnabled] = useState(false);
+  const [playerWaveform, setPlayerWaveform] = useState<string | null>(null);
+  const [compareFiles, setCompareFiles] = useState<[File, File] | null>(null);
+  const [comparePlaying, setComparePlaying] = useState(false);
+  const [compareCurrentTime, setCompareCurrentTime] = useState(0);
+  const [compareDuration, setCompareDuration] = useState(0);
+  const [compareWaveformA, setCompareWaveformA] = useState<string | null>(null);
+  const [compareWaveformB, setCompareWaveformB] = useState<string | null>(null);
+  const [muteLeft, setMuteLeft] = useState(false);
+  const [muteRight, setMuteRight] = useState(false);
+  const [compareBalance, setCompareBalance] = useState(0);
+  const [batchAnalyzing, setBatchAnalyzing] = useState(false);
+  const [batchAnalyzeProgress, setBatchAnalyzeProgress] = useState({ done: 0, total: 0 });
   // Panneau sonogramme — trim (couper début/fin) + fade in/out, réécrit le fichier
   // en place côté serveur (réversible via undo, l'original est sauvegardé à côté).
   const [waveformFile, setWaveformFile] = useState<File | null>(null);
@@ -205,6 +261,8 @@ const [rescanningLyricsPaths, setRescanningLyricsPaths] = useState<Set<string>>(
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [showProjectPicker, setShowProjectPicker] = useState(false);
   const [undoing, setUndoing] = useState(false);
+  const [undoingTo, setUndoingTo] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [closingProject, setClosingProject] = useState(false);
   const [projectStatus, setProjectStatus] = useState<'active' | 'done' | null>(null);
   const [topNotice, setTopNotice] = useState<string | null>(null);
@@ -224,6 +282,16 @@ const [rescanningLyricsPaths, setRescanningLyricsPaths] = useState<Set<string>>(
   const [shortcuts, setShortcuts] = useState<Shortcut[]>([]);
   const audioRef = useRef<HTMLAudioElement>(null);
   const fileListRef = useRef<HTMLDivElement>(null);
+  const batchAnalyzeCancelRef = useRef(false);
+  const selectionAnchorRef = useRef<string | null>(null);
+  const isPaintingRef = useRef(false);
+  const paintedInGestureRef = useRef<Set<string>>(new Set());
+  const compareAudioARef = useRef<HTMLAudioElement>(null);
+  const compareAudioBRef = useRef<HTMLAudioElement>(null);
+  const compareCtxRef = useRef<AudioContext | null>(null);
+  const compareWiredRef = useRef(false);
+  const compareGainARef = useRef<GainNode | null>(null);
+  const compareGainBRef = useRef<GainNode | null>(null);
   const [showHelp, setShowHelp] = useState(false);
 
   useEffect(() => {
@@ -371,6 +439,36 @@ const [rescanningLyricsPaths, setRescanningLyricsPaths] = useState<Set<string>>(
     }
   };
 
+  // Annule en rafale jusqu'à (et y compris) une action donnée de l'historique — l'API /api/undo
+  // ne dépile que le dernier élément, donc on l'appelle en boucle pour "remonter" à ce point.
+  const undoToAction = async (targetId: string) => {
+    const log = state.actionLog || [];
+    const idx = log.findIndex(a => a.id === targetId);
+    if (idx === -1) return;
+
+    setUndoingTo(true);
+    try {
+      const steps = log.length - idx;
+      let lastData: { undone: ActionLogEntry; status: AnalysisState; processedGroups?: string[] } | null = null;
+      for (let i = 0; i < steps; i++) {
+        const res = await fetch(`${API}/undo`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Échec undo');
+        lastData = data;
+      }
+      if (lastData) {
+        showTopNotice(`↩️ Annulé jusqu'à : ${lastData.undone.description}`);
+        setState(lastData.status);
+        if (Array.isArray(lastData.processedGroups)) setProcessedGroups(new Set(lastData.processedGroups));
+      }
+    } catch (err) {
+      showTopNotice(`⚠️ ${String(err instanceof Error ? err.message : err)}`);
+    } finally {
+      setUndoingTo(false);
+      setShowHistory(false);
+    }
+  };
+
   useEffect(() => {
     if (state.status !== 'scanning') return;
 
@@ -423,6 +521,42 @@ const [rescanningLyricsPaths, setRescanningLyricsPaths] = useState<Set<string>>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playingFilePath, state.files.length]);
 
+  // Sonogramme du morceau en cours, affiché en permanence dans la barre de lecture (scrub head)
+  useEffect(() => {
+    if (!playingFilePath) { setPlayerWaveform(null); return; }
+    let cancelled = false;
+    setPlayerWaveform(null);
+    fetch(`${API}/waveform/${toBase64Url(playingFilePath)}`)
+      .then(res => res.json())
+      .then(data => { if (!cancelled && data.image) setPlayerWaveform(data.image); })
+      .catch(() => { /* pas de sonogramme dispo — la barre reste utilisable sans */ });
+    return () => { cancelled = true; };
+  }, [playingFilePath]);
+
+  // Compteur d'écoutes — incrémenté une fois par sélection de lecture (pas à chaque
+  // pause/reprise) pour repérer d'un coup d'œil les morceaux jamais écoutés.
+  useEffect(() => {
+    if (!playingFilePath) return;
+    fetch(`${API}/play-count`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filePath: playingFilePath })
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (!data.success) return;
+        const apply = (f: File) => f.path === playingFilePath ? { ...f, playCount: data.playCount } : f;
+        setState(prev => ({
+          ...prev,
+          files: prev.files.map(apply),
+          duplicates: prev.duplicates.map(d => ({ ...d, files: d.files.map(apply) })),
+          similarPairs: prev.similarPairs.map(p => ({ ...p, fileA: apply(p.fileA), fileB: apply(p.fileB) }))
+        }));
+      })
+      .catch(() => { /* pas bloquant — le compteur restera juste inchangé pour cette lecture */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playingFilePath]);
+
   const formatTime = (secs: number) => {
     if (!isFinite(secs) || secs < 0) return '0:00';
     const m = Math.floor(secs / 60);
@@ -471,6 +605,132 @@ const [rescanningLyricsPaths, setRescanningLyricsPaths] = useState<Set<string>>(
     setPlayingFilePath(state.files[(idx + 1) % state.files.length].path);
   };
 
+  const seekToRatio = (ratio: number) => {
+    const audio = audioRef.current;
+    if (!audio || !duration) return;
+    audio.currentTime = Math.max(0, Math.min(duration, ratio * duration));
+  };
+
+  const handleScrubberClick = (e: React.MouseEvent<HTMLDivElement> | React.PointerEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    seekToRatio((e.clientX - rect.left) / rect.width);
+  };
+
+  // Comparaison A/B stéréo : A exclusivement sur le canal gauche, B sur le droit, lecture
+  // synchronisée — pour trancher à l'oreille entre deux candidats doublons sans aller-retour.
+  const openCompare = (fileA: File, fileB: File) => {
+    setCompareFiles([fileA, fileB]);
+    setComparePlaying(false);
+    setCompareCurrentTime(0);
+    setCompareDuration(0);
+    setMuteLeft(false);
+    setMuteRight(false);
+    setCompareBalance(0);
+    setCompareWaveformA(null);
+    setCompareWaveformB(null);
+    compareWiredRef.current = false;
+    fetch(`${API}/waveform/${toBase64Url(fileA.path)}`).then(r => r.json()).then(d => d.image && setCompareWaveformA(d.image)).catch(() => {});
+    fetch(`${API}/waveform/${toBase64Url(fileB.path)}`).then(r => r.json()).then(d => d.image && setCompareWaveformB(d.image)).catch(() => {});
+  };
+
+  const closeCompare = () => {
+    compareAudioARef.current?.pause();
+    compareAudioBRef.current?.pause();
+    setCompareFiles(null);
+    setComparePlaying(false);
+  };
+
+  // Crossfader façon table de mix DJ : -1 = tout sur A, +1 = tout sur B, 0 = équilibré
+  // (courbe à puissance constante pour un fondu qui ne creuse pas au centre).
+  const handleCompareBalance = (value: number) => {
+    setCompareBalance(value);
+    const angle = (value + 1) * (Math.PI / 4);
+    if (compareGainARef.current) compareGainARef.current.gain.value = Math.cos(angle);
+    if (compareGainBRef.current) compareGainBRef.current.gain.value = Math.sin(angle);
+  };
+
+  const toggleMuteLeft = () => {
+    setMuteLeft(prev => {
+      if (compareAudioARef.current) compareAudioARef.current.muted = !prev;
+      return !prev;
+    });
+  };
+
+  const toggleMuteRight = () => {
+    setMuteRight(prev => {
+      if (compareAudioBRef.current) compareAudioBRef.current.muted = !prev;
+      return !prev;
+    });
+  };
+
+  useEffect(() => {
+    if (!compareFiles) {
+      if (compareCtxRef.current) {
+        compareCtxRef.current.close();
+        compareCtxRef.current = null;
+        compareWiredRef.current = false;
+      }
+      return;
+    }
+    if (compareWiredRef.current) return;
+    const a = compareAudioARef.current;
+    const b = compareAudioBRef.current;
+    if (!a || !b) return;
+
+    const ctx = new AudioContext();
+    compareCtxRef.current = ctx;
+    const pannerA = ctx.createStereoPanner();
+    pannerA.pan.value = -1;
+    const gainA = ctx.createGain();
+    ctx.createMediaElementSource(a).connect(pannerA).connect(gainA).connect(ctx.destination);
+    compareGainARef.current = gainA;
+
+    const pannerB = ctx.createStereoPanner();
+    pannerB.pan.value = 1;
+    const gainB = ctx.createGain();
+    ctx.createMediaElementSource(b).connect(pannerB).connect(gainB).connect(ctx.destination);
+    compareGainBRef.current = gainB;
+
+    compareWiredRef.current = true;
+
+    const onTimeUpdate = () => setCompareCurrentTime(a.currentTime);
+    const onLoadedMetadata = () => setCompareDuration(Math.max(a.duration || 0, b.duration || 0));
+    a.addEventListener('timeupdate', onTimeUpdate);
+    a.addEventListener('loadedmetadata', onLoadedMetadata);
+    return () => {
+      a.removeEventListener('timeupdate', onTimeUpdate);
+      a.removeEventListener('loadedmetadata', onLoadedMetadata);
+    };
+  }, [compareFiles]);
+
+  const toggleComparePlay = () => {
+    const a = compareAudioARef.current;
+    const b = compareAudioBRef.current;
+    if (!a || !b) return;
+    if (comparePlaying) {
+      a.pause();
+      b.pause();
+      setComparePlaying(false);
+    } else {
+      b.currentTime = a.currentTime;
+      compareCtxRef.current?.resume();
+      Promise.all([a.play(), b.play()]).catch(() => {});
+      setComparePlaying(true);
+    }
+  };
+
+  const handleCompareScrub = (e: React.MouseEvent<HTMLDivElement>) => {
+    const a = compareAudioARef.current;
+    const b = compareAudioBRef.current;
+    if (!a || !b || !compareDuration) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const ratio = (e.clientX - rect.left) / rect.width;
+    const t = Math.max(0, Math.min(compareDuration, ratio * compareDuration));
+    a.currentTime = t;
+    b.currentTime = t;
+    setCompareCurrentTime(t);
+  };
+
 
   const selectedFileObjects = state.files.filter(f => selectedFiles.has(f.path));
 
@@ -492,6 +752,113 @@ const [rescanningLyricsPaths, setRescanningLyricsPaths] = useState<Set<string>>(
     const next = new Set(selectedMoods);
     if (next.has(m)) next.delete(m); else next.add(m);
     setSelectedMoods(next);
+  };
+
+  // Panneau mood (volet droit) — contenu réel lu depuis la playlist Navidrome correspondante
+  const openMoodPanel = async (mood: string) => {
+    setOpenMood(mood);
+    setShowSimilar(false);
+    setMoodPanelLoading(true);
+    try {
+      const res = await fetch(`${API}/navidrome/mood/${encodeURIComponent(mood)}`);
+      const data = await res.json();
+      setMoodPanelTracks(Array.isArray(data.tracks) ? data.tracks : []);
+    } catch {
+      setMoodPanelTracks([]);
+    } finally {
+      setMoodPanelLoading(false);
+    }
+  };
+
+  const closeMoodPanel = () => {
+    setOpenMood(null);
+    setMoodPanelTracks([]);
+  };
+
+  // Étiquetage local (pas d'appel Navidrome) — le push explicite reste un geste séparé
+  const tagFilesWithMood = async (filePaths: string[], mood: string, action: 'add' | 'remove' = 'add') => {
+    try {
+      const res = await fetch(`${API}/tag-mood`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filePaths, mood, action })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Échec tag mood');
+
+      const apply = (f: File) => {
+        if (!filePaths.includes(f.path)) return f;
+        const moods = new Set(f.moods || []);
+        if (action === 'remove') moods.delete(mood); else moods.add(mood);
+        return { ...f, moods: Array.from(moods) };
+      };
+      setState(prev => ({
+        ...prev,
+        files: prev.files.map(apply),
+        duplicates: prev.duplicates.map(d => ({ ...d, files: d.files.map(apply) })),
+        similarPairs: prev.similarPairs.map(p => ({
+          ...p,
+          fileA: apply(p.fileA),
+          fileB: apply(p.fileB)
+        }))
+      }));
+    } catch (err) {
+      setGroupNotice(`⚠️ ${String(err instanceof Error ? err.message : err)}`);
+    }
+  };
+
+  const handleFileDragStart = (e: React.DragEvent, filePath: string) => {
+    const paths = selectedFiles.has(filePath) && selectedFiles.size > 0 ? Array.from(selectedFiles) : [filePath];
+    e.dataTransfer.setData('application/json', JSON.stringify(paths));
+    e.dataTransfer.effectAllowed = 'copy';
+  };
+
+  const handleMoodDrop = (e: React.DragEvent, mood: string) => {
+    e.preventDefault();
+    const raw = e.dataTransfer.getData('application/json');
+    if (!raw) return;
+    try {
+      const paths = JSON.parse(raw);
+      if (Array.isArray(paths) && paths.length > 0) tagFilesWithMood(paths, mood, 'add');
+    } catch {
+      // payload de drag malformé — ignoré
+    }
+  };
+
+  // Mode peintre (façon outil Painter de Lightroom) : clique-glisse sur les fichiers pour
+  // appliquer immédiatement les moods/note configurés. Le nom/auteur est optionnel (case à
+  // cocher) car, contrairement au mood/note, il renomme le fichier et tague l'ID3 pour de vrai —
+  // réutilise les mêmes champs Auteur/Titre que le panneau Renommage classique.
+  const paintFile = async (filePath: string) => {
+    if (paintedInGestureRef.current.has(filePath)) return;
+    paintedInGestureRef.current.add(filePath);
+    painterMoods.forEach(mood => tagFilesWithMood([filePath], mood, 'add'));
+    if (painterRating !== null) rateFile(filePath, painterRating);
+
+    if (painterRenameEnabled && authorName.trim()) {
+      try {
+        const res = await fetch(`${API}/rename-bulk`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filePaths: [filePath], author: authorName.trim(), title: titleName.trim(), moods: [] })
+        });
+        const data = await res.json();
+        const result = data.results?.[0];
+        if (res.ok && result?.success) {
+          const newPath = result.newPath;
+          const newName = newPath.split('/').pop();
+          const apply = (f: File) => f.path === filePath ? { ...f, path: newPath, name: newName } : f;
+          setState(prev => ({
+            ...prev,
+            files: prev.files.map(apply),
+            duplicates: prev.duplicates.map(d => ({ ...d, files: d.files.map(apply) })),
+            similarPairs: prev.similarPairs.map(p => ({ ...p, fileA: apply(p.fileA), fileB: apply(p.fileB) }))
+          }));
+        }
+      } catch {
+        // non bloquant — le fichier garde son nom d'origine, à réessayer manuellement
+      }
+    }
   };
 
   const handleGenerateAuthor = async () => {
@@ -1001,6 +1368,76 @@ const [rescanningLyricsPaths, setRescanningLyricsPaths] = useState<Set<string>>(
     }
   };
 
+  const startRename = (file: File) => {
+    setRenamingPath(file.path);
+    setRenameValue(file.name.replace(/\.[^.]+$/, ''));
+  };
+
+  const cancelRename = () => {
+    setRenamingPath(null);
+    setRenameValue('');
+  };
+
+  // Renommage simple d'un fichier isolé — pas besoin de passer par le flux auteur/tags en masse
+  const commitRename = async (filePath: string) => {
+    const newName = renameValue.trim();
+    if (!newName) { cancelRename(); return; }
+
+    setRenamingBusy(true);
+    try {
+      const res = await fetch(`${API}/rename-file`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filePath, newName })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Échec renommage');
+
+      const apply = (f: File) => f.path === filePath ? { ...f, path: data.newPath, name: data.newName } : f;
+      setState(prev => ({
+        ...prev,
+        files: prev.files.map(apply),
+        duplicates: prev.duplicates.map(d => ({ ...d, files: d.files.map(apply) })),
+        similarPairs: prev.similarPairs.map(p => ({
+          ...p,
+          fileA: apply(p.fileA),
+          fileB: apply(p.fileB)
+        }))
+      }));
+      if (workingGroup) {
+        setWorkingGroup(prev => prev ? { ...prev, files: prev.files.map(apply) } : prev);
+      }
+      cancelRename();
+    } catch (err) {
+      setGroupNotice(`⚠️ ${String(err instanceof Error ? err.message : err)}`);
+    } finally {
+      setRenamingBusy(false);
+    }
+  };
+
+  // Analyse BPM/tonalité en masse pour tous les fichiers pas encore passés au crible.
+  // Séquentiel (pas de Promise.all) pour ne pas saturer la machine avec N process Essentia en parallèle.
+  const analyzeAllAudio = async () => {
+    const pending = state.files.filter(f => !f.bpm).map(f => f.path);
+    if (pending.length === 0) return;
+
+    batchAnalyzeCancelRef.current = false;
+    setBatchAnalyzing(true);
+    setBatchAnalyzeProgress({ done: 0, total: pending.length });
+
+    for (let i = 0; i < pending.length; i++) {
+      if (batchAnalyzeCancelRef.current) break;
+      await analyzeAudio(pending[i]);
+      setBatchAnalyzeProgress({ done: i + 1, total: pending.length });
+    }
+
+    setBatchAnalyzing(false);
+  };
+
+  const cancelBatchAnalyze = () => {
+    batchAnalyzeCancelRef.current = true;
+  };
+
   const openWaveformEditor = async (file: File) => {
     setWaveformFile(file);
     setWaveformImage(null);
@@ -1125,6 +1562,16 @@ const [rescanningLyricsPaths, setRescanningLyricsPaths] = useState<Set<string>>(
     return () => window.removeEventListener('keydown', onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playingFilePath, state.files.length, showSurprise, surpriseQueue, surpriseIndex, infoFilePath, waveformFile, showModal, showProjectPicker, showHelp]);
+
+  // Fin du geste de peinture même si le clic est relâché hors d'une ligne
+  useEffect(() => {
+    const onMouseUp = () => {
+      isPaintingRef.current = false;
+      paintedInGestureRef.current = new Set();
+    };
+    window.addEventListener('mouseup', onMouseUp);
+    return () => window.removeEventListener('mouseup', onMouseUp);
+  }, []);
 
   const applyAudioEdit = async () => {
     if (!waveformFile) return;
@@ -1264,6 +1711,27 @@ const [rescanningLyricsPaths, setRescanningLyricsPaths] = useState<Set<string>>(
       newSelection.add(filePath);
     }
     setSelectedFiles(newSelection);
+    selectionAnchorRef.current = filePath;
+  };
+
+  // Sélection façon Explorer/Finder : clic simple = sélection exclusive, Ctrl/Cmd = ajout/retrait
+  // individuel, Shift = plage contiguë depuis le dernier fichier cliqué (l'ordre visible = sortedFiles).
+  const handleFileRowClick = (e: React.MouseEvent, filePath: string, orderedFiles: File[]) => {
+    if (e.shiftKey && selectionAnchorRef.current) {
+      const anchorIdx = orderedFiles.findIndex(f => f.path === selectionAnchorRef.current);
+      const clickIdx = orderedFiles.findIndex(f => f.path === filePath);
+      if (anchorIdx !== -1 && clickIdx !== -1) {
+        const [start, end] = anchorIdx < clickIdx ? [anchorIdx, clickIdx] : [clickIdx, anchorIdx];
+        setSelectedFiles(new Set(orderedFiles.slice(start, end + 1).map(f => f.path)));
+      }
+      return;
+    }
+    if (e.ctrlKey || e.metaKey) {
+      toggleFileSelection(filePath);
+      return;
+    }
+    setSelectedFiles(new Set([filePath]));
+    selectionAnchorRef.current = filePath;
   };
 
   const filteredDuplicates = state.duplicates.filter(
@@ -1289,6 +1757,43 @@ const [rescanningLyricsPaths, setRescanningLyricsPaths] = useState<Set<string>>(
     state.status === 'idle' ? 'Prêt' :
     state.status === 'scanning' ? 'Analyse en cours' :
     state.status === 'completed' ? 'Terminé' : 'Erreur';
+
+  const sortedFiles = useMemo(() => {
+    if (!sortKey) return state.files;
+    const dir = sortDir === 'asc' ? 1 : -1;
+    return [...state.files].sort((a, b) => {
+      if (sortKey === 'name') return a.name.localeCompare(b.name) * dir;
+      if (sortKey === 'bpm') return ((a.bpm ?? -1) - (b.bpm ?? -1)) * dir;
+      if (sortKey === 'rating') return ((a.rating ?? 0) - (b.rating ?? 0)) * dir;
+      if (sortKey === 'plays') return ((a.playCount ?? 0) - (b.playCount ?? 0)) * dir;
+      return (a.size - b.size) * dir;
+    });
+  }, [state.files, sortKey, sortDir]);
+
+  const toggleSort = (key: 'name' | 'bpm' | 'rating' | 'size' | 'plays') => {
+    if (sortKey === key) {
+      setSortDir(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortKey(key);
+      setSortDir('asc');
+    }
+  };
+
+  // Filtre bas de page façon filmstrip Lightroom — plusieurs notes actives à la fois (union),
+  // "0" = uniquement les fichiers jamais notés.
+  const toggleRatingFilter = (n: number) => {
+    setRatingFilter(prev => {
+      const next = new Set(prev);
+      if (next.has(n)) next.delete(n); else next.add(n);
+      return next;
+    });
+  };
+
+  const visibleFiles = ratingFilter.size === 0
+    ? sortedFiles
+    : sortedFiles.filter(f => ratingFilter.has(f.rating ?? 0));
+
+  const pendingMoodFiles = openMood ? state.files.filter(f => f.moods?.includes(openMood)) : [];
 
   return (
     <div className="app">
@@ -1351,14 +1856,42 @@ const [rescanningLyricsPaths, setRescanningLyricsPaths] = useState<Set<string>>(
           >
             <FolderIcon size={12} /> Projets
           </button>
-          <button
-            className="top-btn"
-            onClick={handleUndo}
-            disabled={undoing || !state.actionCount}
-            title={state.actionCount ? `Annuler : ${state.actionCount} action(s) journalisée(s)` : 'Aucune action à annuler'}
-          >
-            <UndoIcon /> {undoing ? '…' : `Annuler${state.actionCount ? ` (${state.actionCount})` : ''}`}
-          </button>
+          <div className="undo-history-wrapper">
+            <button
+              className="top-btn"
+              onClick={handleUndo}
+              disabled={undoing || undoingTo || !state.actionCount}
+              title={state.actionCount ? `Annuler : ${state.actionCount} action(s) journalisée(s)` : 'Aucune action à annuler'}
+            >
+              <UndoIcon /> {undoing ? '…' : `Annuler${state.actionCount ? ` (${state.actionCount})` : ''}`}
+            </button>
+            {!!state.actionCount && (
+              <button
+                className={`undo-history-toggle ${showHistory ? 'active' : ''}`}
+                onClick={() => setShowHistory(p => !p)}
+                title="Historique des actions"
+              >
+                🕓
+              </button>
+            )}
+            {showHistory && (
+              <div className="undo-history-panel">
+                <div className="undo-history-title">Historique — clique pour annuler jusqu'à ce point</div>
+                {[...(state.actionLog || [])].reverse().map((a, i) => (
+                  <button
+                    key={a.id}
+                    className="undo-history-item"
+                    onClick={() => undoToAction(a.id)}
+                    disabled={undoingTo}
+                  >
+                    <span className="undo-history-badge">{i === 0 ? 'dernière' : `-${i + 1}`}</span>
+                    <span className="undo-history-desc">{a.description}</span>
+                    <span className="undo-history-time">{new Date(a.timestamp).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           {state.dirPath && (
             projectStatus === 'done' ? (
               <button className="top-btn" onClick={() => reopenDoneProject(state.dirPath!)}>
@@ -1509,12 +2042,17 @@ const [rescanningLyricsPaths, setRescanningLyricsPaths] = useState<Set<string>>(
                     <button
                       key={m}
                       type="button"
-                      className={`mood-chip ${selectedMoods.has(m) ? 'active' : ''}`}
+                      className={`mood-chip ${selectedMoods.has(m) ? 'active' : ''} ${dragOverMood === m ? 'drop-target' : ''}`}
                       style={{
                         background: selectedMoods.has(m) ? moodColor(m) : undefined,
                         borderColor: moodColor(m)
                       } as any}
                       onClick={() => toggleMood(m)}
+                      onDoubleClick={() => openMoodPanel(m)}
+                      title="Clic : sélectionner · Double-clic : voir le contenu · Glisser des fichiers ici pour taguer"
+                      onDragOver={(e) => { e.preventDefault(); setDragOverMood(m); }}
+                      onDragLeave={() => setDragOverMood(prev => prev === m ? null : prev)}
+                      onDrop={(e) => { handleMoodDrop(e, m); setDragOverMood(null); }}
                     >
                       <span className="mood-dot" style={{ background: moodColor(m) }} />
                       {m}
@@ -1561,14 +2099,116 @@ const [rescanningLyricsPaths, setRescanningLyricsPaths] = useState<Set<string>>(
                   <TrashIcon /> Quarantaine ({selectedFiles.size})
                 </button>
               )}
+              {selectedFiles.size === 2 && (
+                <button
+                  className="compare-btn"
+                  onClick={() => {
+                    const [pathA, pathB] = Array.from(selectedFiles);
+                    const fileA = state.files.find(f => f.path === pathA);
+                    const fileB = state.files.find(f => f.path === pathB);
+                    if (fileA && fileB) openCompare(fileA, fileB);
+                  }}
+                  title="Comparer les deux fichiers sélectionnés : A sur le canal gauche, B sur le canal droit, en synchro"
+                >
+                  🎧 Comparer (A/B stéréo)
+                </button>
+              )}
               {state.files.length > 0 && (
                 <button className="surprise-btn" onClick={startSurprise} title="Écoute rapide de 10 morceaux au hasard">
                   🎲 Surprends-moi
                 </button>
               )}
-              <span className="panel-count">{state.files.length}</span>
+              {state.files.length > 0 && (
+                <button
+                  className={`painter-toggle ${painterMode ? 'active' : ''}`}
+                  onClick={() => setPainterMode(p => !p)}
+                  title="Mode peintre (comme l'outil Painter de Lightroom) : configure un mood/une note puis clique-glisse sur les fichiers pour l'appliquer directement"
+                >
+                  🖌️ Peintre
+                </button>
+              )}
+              {state.files.length > 0 && (
+                batchAnalyzing ? (
+                  <button className="bpm-batch-btn analyzing" onClick={cancelBatchAnalyze} title="Annuler l'analyse en cours">
+                    …{batchAnalyzeProgress.done}/{batchAnalyzeProgress.total} — annuler
+                  </button>
+                ) : (
+                  <button
+                    className="bpm-batch-btn"
+                    onClick={analyzeAllAudio}
+                    disabled={state.files.every(f => f.bpm)}
+                    title="Analyser le BPM/tonalité de tous les fichiers pas encore passés au crible"
+                  >
+                    🎵 Analyser tout (BPM/tonalité)
+                  </button>
+                )
+              )}
+              <span className="panel-count">
+                {ratingFilter.size > 0 ? `${visibleFiles.length}/${state.files.length}` : state.files.length}
+              </span>
             </div>
           </div>
+
+          {painterMode && (
+            <div className="painter-bar">
+              <span className="painter-label"><TagIcon size={11} /> Mood(s) à peindre</span>
+              <div className="painter-moods">
+                {availableMoods.map(m => (
+                  <button
+                    key={m}
+                    type="button"
+                    className={`mood-chip small ${painterMoods.has(m) ? 'active' : ''}`}
+                    style={{
+                      background: painterMoods.has(m) ? moodColor(m) : undefined,
+                      borderColor: moodColor(m)
+                    } as any}
+                    onClick={() => setPainterMoods(prev => {
+                      const next = new Set(prev);
+                      if (next.has(m)) next.delete(m); else next.add(m);
+                      return next;
+                    })}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+              <span className="painter-label">Note</span>
+              <div className="painter-rating">
+                <button
+                  className={`rating-filter-btn zero ${painterRating === 0 ? 'active' : ''}`}
+                  onClick={() => setPainterRating(prev => prev === 0 ? null : 0)}
+                  title="Peindre : sans note"
+                >
+                  0
+                </button>
+                {[1, 2, 3, 4, 5].map(n => (
+                  <button
+                    key={n}
+                    className={`rating-filter-btn ${painterRating !== null && n <= painterRating ? 'active' : ''}`}
+                    onClick={() => setPainterRating(prev => prev === n ? null : n)}
+                    title={`Peindre : ${n} étoile${n > 1 ? 's' : ''}`}
+                  >
+                    <StarIcon size={11} filled={painterRating !== null && n <= painterRating} />
+                  </button>
+                ))}
+              </div>
+              <label className="painter-rename-toggle" title="Utilise les champs Auteur/Titre du panneau Renommage à gauche">
+                <input
+                  type="checkbox"
+                  checked={painterRenameEnabled}
+                  onChange={(e) => setPainterRenameEnabled(e.target.checked)}
+                />
+                <EditIcon size={11} /> Nom + auteur ({authorName.trim() || '—'}{titleName.trim() ? ` / ${titleName.trim()}` : ''})
+              </label>
+              <span className="painter-hint">
+                {painterMoods.size === 0 && painterRating === null && !painterRenameEnabled
+                  ? 'Choisis un mood, une note et/ou active nom+auteur, puis clique-glisse sur les fichiers'
+                  : painterRenameEnabled && !authorName.trim()
+                  ? '⚠️ Renseigne un auteur dans le panneau Renommage à gauche'
+                  : 'Clique-glisse sur les fichiers pour peindre'}
+              </span>
+            </div>
+          )}
 
           {state.files.length === 0 ? (
             <div className="empty-state">
@@ -1576,27 +2216,58 @@ const [rescanningLyricsPaths, setRescanningLyricsPaths] = useState<Set<string>>(
               <p>Aucun fichier scanné</p>
               <span>Sélectionne un répertoire pour démarrer l&apos;analyse</span>
             </div>
+          ) : visibleFiles.length === 0 ? (
+            <div className="empty-state">
+              <StarIcon size={28} />
+              <p>Aucun fichier avec cette note</p>
+              <span>Change le filtre d&apos;étoiles en bas de page</span>
+            </div>
           ) : (
             <div className="file-list">
               <div className="file-list-head">
                 <span className="col-check" />
                 <span className="col-num">#</span>
-                <span className="col-name">Nom</span>
+                <button className="col-name col-sortable" onClick={() => toggleSort('name')}>
+                  Nom {sortKey === 'name' && (sortDir === 'asc' ? '▲' : '▼')}
+                </button>
+                <span className="col-rename" />
+                <span className="col-navidrome" />
                 <span className="col-lyrics-state" />
-                <span className="col-rating">Note</span>
-                <span className="col-size">Taille</span>
+                <button className="col-plays col-sortable" onClick={() => toggleSort('plays')} title="Nombre d'écoutes">
+                  ▶ {sortKey === 'plays' && (sortDir === 'asc' ? '▲' : '▼')}
+                </button>
+                <button className="col-bpm col-sortable" onClick={() => toggleSort('bpm')}>
+                  BPM {sortKey === 'bpm' && (sortDir === 'asc' ? '▲' : '▼')}
+                </button>
+                <button className="col-rating col-sortable" onClick={() => toggleSort('rating')}>
+                  Note {sortKey === 'rating' && (sortDir === 'asc' ? '▲' : '▼')}
+                </button>
+                <button className="col-size col-sortable" onClick={() => toggleSort('size')}>
+                  Taille {sortKey === 'size' && (sortDir === 'asc' ? '▲' : '▼')}
+                </button>
                 <span className="col-play" />
                 <span className="col-waveform" />
                 <span className="col-delete" />
               </div>
               <div className="file-list-body" ref={fileListRef}>
-                {state.files.map((file, idx) => {
+                {visibleFiles.map((file, idx) => {
                   const lyricsState = getLyricsState(file);
                   return (
                   <div
-                    key={idx}
-                    className={`file-row ${idx % 2 === 0 ? 'even' : 'odd'} ${selectedFiles.has(file.path) ? 'selected' : ''} ${playingFilePath === file.path ? 'playing' : ''}`}
-                    onClick={() => toggleFileSelection(file.path)}
+                    key={file.path}
+                    className={`file-row ${idx % 2 === 0 ? 'even' : 'odd'} ${selectedFiles.has(file.path) ? 'selected' : ''} ${playingFilePath === file.path ? 'playing' : ''} ${painterMode ? 'paintable' : ''}`}
+                    onClick={(e) => { if (!painterMode) handleFileRowClick(e, file.path, visibleFiles); }}
+                    onMouseDown={() => {
+                      if (!painterMode) return;
+                      isPaintingRef.current = true;
+                      paintedInGestureRef.current = new Set();
+                      paintFile(file.path);
+                    }}
+                    onMouseEnter={() => {
+                      if (painterMode && isPaintingRef.current) paintFile(file.path);
+                    }}
+                    draggable={!painterMode}
+                    onDragStart={(e) => handleFileDragStart(e, file.path)}
                   >
                     <input
                       type="checkbox"
@@ -1606,7 +2277,39 @@ const [rescanningLyricsPaths, setRescanningLyricsPaths] = useState<Set<string>>(
                       onClick={(e) => e.stopPropagation()}
                     />
                     <span className="file-num">{idx + 1}</span>
-                    <span className="file-name" title={file.name}>{file.name}</span>
+                    {renamingPath === file.path ? (
+                      <input
+                        type="text"
+                        className="file-name-input"
+                        value={renameValue}
+                        autoFocus
+                        disabled={renamingBusy}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') { e.preventDefault(); commitRename(file.path); }
+                          if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
+                        }}
+                        onBlur={() => commitRename(file.path)}
+                      />
+                    ) : (
+                      <span className="file-name" title={file.name}>{file.name}</span>
+                    )}
+                    {renamingPath !== file.path && (
+                      <button
+                        className="file-rename-btn"
+                        title="Renommer ce fichier"
+                        onClick={(e) => { e.stopPropagation(); startRename(file); }}
+                      >
+                        <EditIcon size={11} />
+                      </button>
+                    )}
+                    <span
+                      className={`col-navidrome ${file.pushedToNavidrome ? 'pushed' : ''}`}
+                      title={file.pushedToNavidrome ? 'Déjà envoyé vers Navidrome' : 'Pas encore envoyé vers Navidrome'}
+                    >
+                      {file.pushedToNavidrome && <NavidromeIcon size={12} />}
+                    </span>
                     <button
                       className={`col-lyrics-state state-${lyricsState}`}
                       title="Voir les infos du fichier (paroles, bpm, tonalité...)"
@@ -1614,6 +2317,28 @@ const [rescanningLyricsPaths, setRescanningLyricsPaths] = useState<Set<string>>(
                     >
                       {lyricsState === 'lyrics' ? <MicIcon size={12} /> : lyricsState === 'instrumental' ? <MicOffIcon size={12} /> : <HelpIcon size={12} />}
                     </button>
+                    <span
+                      className={`col-plays ${!file.playCount ? 'unplayed' : ''}`}
+                      title={file.playCount ? `Écouté ${file.playCount} fois` : 'Jamais écouté'}
+                    >
+                      {file.playCount || '—'}
+                    </span>
+                    <span className="col-bpm">
+                      {file.bpm ? (
+                        <span className="bpm-value" title={`${file.bpm} BPM · ${file.key}${file.scale === 'minor' ? 'm' : ''}`}>
+                          {Math.round(file.bpm)} · {file.key}{file.scale === 'minor' ? 'm' : ''}
+                        </span>
+                      ) : (
+                        <button
+                          className="col-bpm-btn"
+                          title="Analyser BPM/tonalité"
+                          onClick={(e) => { e.stopPropagation(); analyzeAudio(file.path); }}
+                          disabled={analyzingPaths.has(file.path)}
+                        >
+                          {analyzingPaths.has(file.path) ? '…' : '🎵'}
+                        </button>
+                      )}
+                    </span>
                     <span className="col-rating">
                       <StarRating value={file.rating} onChange={(n) => rateFile(file.path, n)} size={11} />
                     </span>
@@ -1658,13 +2383,75 @@ const [rescanningLyricsPaths, setRescanningLyricsPaths] = useState<Set<string>>(
         {/* RIGHT PANEL */}
         <aside className="right-panel">
           <div className="panel-header">
-            <h2>{showSimilar ? `Similaires (${similarMin}-${similarMax}%)` : 'Doublons'}</h2>
-            <span className="panel-count">
-              {showSimilar ? filteredSimilarPairs.length : filteredDuplicates.length}
-            </span>
+            <h2>{openMood ? <><TagIcon size={14} /> {openMood}</> : showSimilar ? `Similaires (${similarMin}-${similarMax}%)` : 'Doublons'}</h2>
+            {openMood ? (
+              <button className="mood-panel-close" onClick={closeMoodPanel} title="Fermer">
+                <XIcon size={13} />
+              </button>
+            ) : (
+              <span className="panel-count">
+                {showSimilar ? filteredSimilarPairs.length : filteredDuplicates.length}
+              </span>
+            )}
           </div>
 
-          {showSimilar ? (
+          {openMood ? (
+            <div
+              className={`mood-panel-body ${moodDropActive ? 'drop-active' : ''}`}
+              onDragOver={(e) => { e.preventDefault(); setMoodDropActive(true); }}
+              onDragLeave={() => setMoodDropActive(false)}
+              onDrop={(e) => { handleMoodDrop(e, openMood); setMoodDropActive(false); }}
+            >
+              <div className="mood-drop-zone">
+                <TagIcon size={18} />
+                <p>Glisse des fichiers ici pour les taguer « {openMood} »</p>
+              </div>
+
+              {pendingMoodFiles.length > 0 && (
+                <>
+                  <div className="mood-section-label">En attente d'envoi ({pendingMoodFiles.length})</div>
+                  <div className="mood-track-list">
+                    {pendingMoodFiles.map(f => (
+                      <div key={f.path} className="mood-track pending">
+                        <span className="mood-track-title" title={f.name}>{f.name}</span>
+                        <button
+                          className="mood-track-remove"
+                          onClick={() => tagFilesWithMood([f.path], openMood, 'remove')}
+                          title="Retirer ce mood"
+                        >
+                          <XIcon size={10} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              <div className="mood-section-label">
+                Déjà sur Navidrome{!moodPanelLoading && ` (${moodPanelTracks.length})`}
+              </div>
+              {moodPanelLoading ? (
+                <div className="empty-state small">
+                  <WaveIcon size={20} />
+                  <p>Chargement…</p>
+                </div>
+              ) : moodPanelTracks.length === 0 ? (
+                <div className="empty-state small">
+                  <TagIcon size={20} />
+                  <p>Rien encore sur Navidrome pour ce mood</p>
+                </div>
+              ) : (
+                <div className="mood-track-list">
+                  {moodPanelTracks.map(t => (
+                    <div key={t.songId} className="mood-track">
+                      <span className="mood-track-title" title={t.title}>{t.title}</span>
+                      {t.artist && <span className="mood-track-artist">{t.artist}</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : showSimilar ? (
             filteredSimilarPairs.length === 0 ? (
               <div className="empty-state small">
                 <SparkleIcon />
@@ -1792,20 +2579,57 @@ const [rescanningLyricsPaths, setRescanningLyricsPaths] = useState<Set<string>>(
           <button className="control-btn ghost" onClick={handleNextTrack} disabled={playingFilePath === null}>
             <NextIcon />
           </button>
+          <div className="rating-filter" title="Filtrer par note (comme le filmstrip Lightroom)">
+            <button
+              className={`rating-filter-btn zero ${ratingFilter.has(0) ? 'active' : ''}`}
+              onClick={() => toggleRatingFilter(0)}
+              title="Filtrer : sans note"
+            >
+              0
+            </button>
+            {[1, 2, 3, 4, 5].map(n => (
+              <button
+                key={n}
+                className={`rating-filter-btn ${ratingFilter.has(n) ? 'active' : ''}`}
+                onClick={() => toggleRatingFilter(n)}
+                title={`Filtrer : ${n} étoile${n > 1 ? 's' : ''}`}
+              >
+                <StarIcon size={12} filled={ratingFilter.has(n)} />
+              </button>
+            ))}
+          </div>
         </div>
 
-        <div className="player-track">
+        <div className="player-scrubber">
           {(() => {
             const playingFile = playingFilePath ? state.files.find(f => f.path === playingFilePath) : null;
             return playingFile ? (
-              <>
-                <WaveIcon size={14} />
-                <span>{playingFile.name}</span>
-              </>
+              <span className="player-scrubber-title"><WaveIcon size={12} /> {playingFile.name}</span>
             ) : (
-              <span className="muted">Aucun fichier en lecture</span>
+              <span className="player-scrubber-title muted">Aucun fichier en lecture</span>
             );
           })()}
+          <div
+            className={`scrubber-track ${!playingFilePath ? 'disabled' : ''}`}
+            onClick={playingFilePath ? handleScrubberClick : undefined}
+            onPointerDown={playingFilePath ? (e) => {
+              e.currentTarget.setPointerCapture(e.pointerId);
+              handleScrubberClick(e);
+            } : undefined}
+            onPointerMove={playingFilePath ? (e) => { if (e.buttons === 1) handleScrubberClick(e); } : undefined}
+          >
+            {playerWaveform ? (
+              <img className="scrubber-waveform" src={playerWaveform} alt="" draggable={false} />
+            ) : (
+              <div className="scrubber-waveform-placeholder" />
+            )}
+            <div className="scrubber-progress" style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }} />
+            <div className="scrubber-head" style={{ left: `${duration ? (currentTime / duration) * 100 : 0}%` }} />
+          </div>
+          <div className="player-scrubber-times">
+            <span>{formatTime(currentTime)}</span>
+            <span>{formatTime(duration)}</span>
+          </div>
         </div>
 
         <div className="player-volume">
@@ -1820,7 +2644,6 @@ const [rescanningLyricsPaths, setRescanningLyricsPaths] = useState<Set<string>>(
               if (audioRef.current) audioRef.current.volume = Number(e.target.value) / 100;
             }}
           />
-          <span className="time-display">{formatTime(currentTime)} / {formatTime(duration)}</span>
         </div>
       </footer>
 
@@ -1982,6 +2805,11 @@ const [rescanningLyricsPaths, setRescanningLyricsPaths] = useState<Set<string>>(
                       <button className="meta-analyze-btn" onClick={() => analyzeAudio(file.path)} disabled={isAnalyzing}>
                         {isAnalyzing ? '…analyse' : '🎵 Analyser BPM/tonalité'}
                       </button>
+                    )}
+                    {file.pushedToNavidrome && (
+                      <span className="meta-item navidrome-pushed" title="Déjà envoyé vers Navidrome">
+                        <NavidromeIcon size={11} /> Envoyé
+                      </span>
                     )}
                   </div>
                 </div>
@@ -2309,6 +3137,82 @@ const [rescanningLyricsPaths, setRescanningLyricsPaths] = useState<Set<string>>(
         );
       })()}
 
+      {compareFiles && (() => {
+        const [fileA, fileB] = compareFiles;
+        const pct = compareDuration ? (compareCurrentTime / compareDuration) * 100 : 0;
+        return (
+          <div className="modal-overlay" onClick={closeCompare}>
+            <div className="compare-modal" onClick={(e) => e.stopPropagation()}>
+              <div className="waveform-header">
+                <span>🎧 Comparaison A/B stéréo</span>
+                <button className="surprise-close" onClick={closeCompare} title="Fermer">✕</button>
+              </div>
+
+              <div className="compare-split">
+                <div className="compare-side">
+                  <div className="compare-side-head">
+                    <span className="compare-channel-label">⬅ Canal gauche</span>
+                    <button className={`compare-mute-btn ${muteLeft ? 'active' : ''}`} onClick={toggleMuteLeft} title={muteLeft ? 'Réactiver le canal gauche' : 'Couper le canal gauche'}>
+                      {muteLeft ? '🔇' : '🔊'}
+                    </button>
+                  </div>
+                  <span className="compare-filename" title={fileA.name}>{fileA.name}</span>
+                  <div className="compare-mini-waveform">
+                    {compareWaveformA ? <img src={compareWaveformA} alt="" draggable={false} /> : <div className="scrubber-waveform-placeholder" />}
+                    <div className="scrubber-head" style={{ left: `${pct}%` }} />
+                  </div>
+                </div>
+                <div className="compare-side">
+                  <div className="compare-side-head">
+                    <span className="compare-channel-label">Canal droit ➡</span>
+                    <button className={`compare-mute-btn ${muteRight ? 'active' : ''}`} onClick={toggleMuteRight} title={muteRight ? 'Réactiver le canal droit' : 'Couper le canal droit'}>
+                      {muteRight ? '🔇' : '🔊'}
+                    </button>
+                  </div>
+                  <span className="compare-filename" title={fileB.name}>{fileB.name}</span>
+                  <div className="compare-mini-waveform">
+                    {compareWaveformB ? <img src={compareWaveformB} alt="" draggable={false} /> : <div className="scrubber-waveform-placeholder" />}
+                    <div className="scrubber-head" style={{ left: `${pct}%` }} />
+                  </div>
+                </div>
+              </div>
+
+              <div className="compare-controls">
+                <button className="control-btn primary" onClick={toggleComparePlay}>
+                  {comparePlaying ? <PauseIcon /> : <PlayIcon />}
+                </button>
+                <div className="scrubber-track compare-scrubber" onClick={handleCompareScrub}>
+                  <div className="scrubber-progress" style={{ width: `${pct}%` }} />
+                  <div className="scrubber-head" style={{ left: `${pct}%` }} />
+                </div>
+                <span className="player-scrubber-times compare-times">
+                  <span>{formatTime(compareCurrentTime)}</span>
+                  <span>{formatTime(compareDuration)}</span>
+                </span>
+              </div>
+
+              <div className="compare-crossfader">
+                <span className="crossfader-label">A</span>
+                <input
+                  type="range"
+                  className="crossfader-slider"
+                  min={-1}
+                  max={1}
+                  step={0.01}
+                  value={compareBalance}
+                  onChange={(e) => handleCompareBalance(Number(e.target.value))}
+                  title="Balance A/B façon crossfader DJ"
+                />
+                <span className="crossfader-label">B</span>
+              </div>
+
+              <audio ref={compareAudioARef} src={`${API}/stream/${toBase64Url(fileA.path)}`} />
+              <audio ref={compareAudioBRef} src={`${API}/stream/${toBase64Url(fileB.path)}`} />
+            </div>
+          </div>
+        );
+      })()}
+
       {infoFilePath && (() => {
         const file = findFileByPath(infoFilePath);
         if (!file) { closeInfo(); return null; }
@@ -2526,9 +3430,9 @@ function HelpIcon({ size = 16 }: { size?: number }) {
   );
 }
 
-function TagIcon() {
+function TagIcon({ size = 14 }: { size?: number }) {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M12 2H3v9l10.29 10.3a1 1 0 0 0 1.42 0l7.29-7.3a1 1 0 0 0 0-1.4L12 2Z" />
       <circle cx="7.5" cy="7.5" r="1.5" />
     </svg>
@@ -2605,6 +3509,31 @@ function LinkIcon({ size = 14 }: { size?: number }) {
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
       <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+    </svg>
+  );
+}
+
+function EditIcon({ size = 13 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+      <path d="M15 5l4 4" />
+    </svg>
+  );
+}
+
+function NavidromeIcon({ size = 12 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10Z" />
+    </svg>
+  );
+}
+
+function XIcon({ size = 12 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 6 6 18M6 6l12 12" />
     </svg>
   );
 }
