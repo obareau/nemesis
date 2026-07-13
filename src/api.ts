@@ -98,6 +98,15 @@ export interface QuarantineItem {
   size: number;
 }
 
+// Fichier en attente dans la boîte de dépôt (onglet Import)
+export interface InboxFile {
+  path: string;
+  name: string;
+  size: number;
+  mtime: number;
+  relPath: string; // sous-dossier relatif dans l'inbox ('' si à la racine)
+}
+
 export const API = '/api';
 
 // Encode un chemin de fichier en base64url (compatible UTF-8) pour l'URL de streaming —
@@ -205,6 +214,23 @@ export function navidromePush(filePaths: string[], moods: string[]) {
 
 export function getNavidromePushProgress() {
   return fetch(`${API}/navidrome/push-progress`);
+}
+
+export function getImportInbox() {
+  return fetch(`${API}/import/inbox`);
+}
+
+export function importAnalyze(filePath: string) {
+  return postJson('/import/analyze', { filePath });
+}
+
+export function importSend(filePaths: string[], moods: string[]) {
+  return postJson('/import/send', { filePaths, moods });
+}
+
+// URL directe (pas un fetch) — passée telle quelle à l'élément <audio> de pré-écoute
+export function importStreamUrl(filePath: string): string {
+  return `${API}/import/stream/${toBase64Url(filePath)}`;
 }
 
 export function skipGroup(method: string, filePaths: string[]) {

@@ -69,25 +69,28 @@ export async function ensurePlaylistAndAddSong(moodName, songId) {
   }
 }
 
-// Vérifie si un morceau équivalent (nom proche, chemin différent) est déjà catalogué
-// dans Navidrome — sert à détecter les doublons déjà présents avant tout ajout aux
-// playlists mood, pour les router vers une playlist "Covers" de mise en attente.
-export async function findExistingCatalogMatch(filePath, threshold = 75) {
-  const fileName = path.basename(filePath);
-  const baseName = path.basename(fileName, path.extname(fileName));
-  // Le "titre coeur" est le dernier segment après " - " (auteur/titre ajoutés par Nemesis)
-  const coreTitle = baseName.split(' - ').pop().trim();
+// Vérifie si un morceau équivalent (titre proche, entrée catalogue différente) est déjà
+// catalogué dans Navidrome — sert à détecter les doublons déjà présents avant tout ajout
+// aux playlists mood, pour les router vers une playlist "Covers" de mise en attente.
+// Compare par titre ID3 en priorité (comme findSongIdForFile) : le nom de fichier peut
+// diverger complètement du titre réel. L'auto-exclusion se fait par songId (selfSongId),
+// PAS par chemin : le `path` renvoyé par Subsonic est virtuel (reconstruit depuis les
+// tags) et ne correspond jamais au chemin disque réel.
+export async function findExistingCatalogMatch(filePath, { selfSongId = null, threshold = 75 } = {}) {
+  const stem = path.basename(filePath, path.extname(filePath));
+  const tags = await readTags(filePath).catch(() => ({}));
+  // Titre ID3 si présent, sinon dernier segment après " - " du nom (auteur/titre Nemesis)
+  const coreTitle = tags.title?.trim() || stem.split(' - ').pop().trim();
 
   const result = await subsonicGet('search3.view', `&query=${encodeURIComponent(coreTitle)}&songCount=15`);
   const songs = result.searchResult3?.song || [];
 
   for (const song of songs) {
-    if (!song.path) continue;
-    const absolutePath = path.join(NAVIDROME_LIBRARY_ROOT, song.path);
-    if (absolutePath === filePath) continue; // c'est notre propre fichier tout juste indexé
+    if (selfSongId && song.id === selfSongId) continue; // notre propre fichier tout juste indexé
 
     const sim = fuzzyMatch(song.title || '', coreTitle);
     if (sim >= threshold) {
+      const absolutePath = song.path ? path.join(NAVIDROME_LIBRARY_ROOT, song.path) : null;
       return { songId: song.id, title: song.title, path: absolutePath, similarity: sim };
     }
   }

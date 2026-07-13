@@ -16,6 +16,7 @@ import { HelpModal } from './components/HelpModal';
 import { formatTime, getLyricsState } from './format';
 import { moodColor } from './moods';
 import { SurpriseModal } from './components/SurpriseModal';
+import { ImportPanel } from './components/ImportPanel';
 import { InfoPanelModal } from './components/InfoPanelModal';
 import { WaveformEditorModal } from './components/WaveformEditorModal';
 import { CompareModal } from './components/CompareModal';
@@ -117,6 +118,9 @@ function App() {
   const [reviewQueue, setReviewQueue] = useState<Duplicate[]>([]);
   const [reviewIndex, setReviewIndex] = useState(0);
   const [reviewActive, setReviewActive] = useState(false);
+  // Onglet actif : Import (flux quotidien simple, atterrissage) ou Curation (l'écran
+  // complet historique — doublons, notes, renommage, quarantaine).
+  const [activeTab, setActiveTab] = useState<'import' | 'curation'>('import');
   const [openMood, setOpenMood] = useState<string | null>(null);
   const [moodPanelTracks, setMoodPanelTracks] = useState<MoodTrack[]>([]);
   const [moodPanelLoading, setMoodPanelLoading] = useState(false);
@@ -1498,6 +1502,10 @@ function App() {
         return;
       }
 
+      // Onglet Import : seuls Échap et ? restent actifs — les raccourcis lecteur/note
+      // pilotent le player de curation, caché derrière l'onglet.
+      if (activeTab !== 'curation') return;
+
       // Morceau "actif" pour les raccourcis note/info/garder/quarantaine : le tirage
       // surprise prime, puis le fichier du panneau info ouvert, puis la lecture en cours.
       const activeFilePath = (showSurprise && surpriseQueue[surpriseIndex])
@@ -1565,7 +1573,7 @@ function App() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playingFilePath, state.files.length, showSurprise, surpriseQueue, surpriseIndex, infoFilePath, waveformFile, showModal, showProjectPicker, showHelp]);
+  }, [playingFilePath, state.files.length, showSurprise, surpriseQueue, surpriseIndex, infoFilePath, waveformFile, showModal, showProjectPicker, showHelp, activeTab]);
 
   // Fin du geste de peinture même si le clic est relâché hors d'une ligne
   useEffect(() => {
@@ -1796,6 +1804,23 @@ function App() {
           <span className="brand-name">Nemesis</span>
         </div>
 
+        <nav className="tab-bar">
+          <button
+            className={`tab-btn ${activeTab === 'import' ? 'active' : ''}`}
+            onClick={() => setActiveTab('import')}
+            title="Nouveaux morceaux : moods + envoi vers la radio, sans passer par la curation"
+          >
+            📥 Import
+          </button>
+          <button
+            className={`tab-btn ${activeTab === 'curation' ? 'active' : ''}`}
+            onClick={() => setActiveTab('curation')}
+            title="Tri complet : doublons, notes, renommage, quarantaine"
+          >
+            ⚖️ Curation
+          </button>
+        </nav>
+
         <div className="progress-section">
           {state.status === 'scanning' ? (
             <>
@@ -1913,7 +1938,9 @@ function App() {
         </div>
       </header>
 
-      <div className="main-content">
+      {activeTab === 'import' && <ImportPanel availableMoods={availableMoods} />}
+
+      <div className="main-content" style={activeTab === 'import' ? { display: 'none' } : undefined}>
         {/* LEFT PANEL */}
         <aside className="left-panel">
           <section className="panel-section">

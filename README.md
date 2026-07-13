@@ -16,6 +16,11 @@ Trier des centaines/milliers de MP3 à la main pour trouver les doublons — vra
 
 ## Fonctionnalités
 
+### Onglet Import — le flux quotidien en un écran
+L'onglet d'atterrissage. Une boîte de dépôt (`~/music-import`, surveillée au focus de la fenêtre) liste les nouveaux morceaux : pré-écoute, bouton "Suggérer" (analyse BPM/tonalité Essentia puis suggestion de moods via Ollama, pré-cochés), sélection des moods, et un seul bouton "Envoyer vers la radio" — Nemesis déplace les fichiers vers un dossier daté de la bibliothèque Navidrome, relance le scan, crée les playlists mood manquantes (publiques) et y ajoute les morceaux. Un doublon déjà au catalogue part automatiquement en playlist Covers. Aucun concept de curation requis.
+
+L'onglet **Curation** regroupe tout le reste (détection de doublons, notes, renommage, quarantaine) pour les sessions de tri.
+
 ### Détection en entonnoir (4 étapes, chacune affinant la précédente)
 1. **Taille exacte** — instantané, détecte les copies parfaites
 2. **Fuzzy match sur le nom** — distance de Levenshtein + clustering union-find sur tous les fichiers

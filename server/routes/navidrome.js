@@ -1,14 +1,11 @@
 import express from 'express';
 import path from 'path';
-import { NAVIDROME_LIBRARY_ROOT, COVERS_PLAYLIST_NAME } from '../config.js';
-import { analysisState, actionLog, persistProject, applyNavidromePushed } from '../store.js';
-import { subsonicGet, waitForScanCompletion, findSongIdForFile, ensurePlaylistAndAddSong, findExistingCatalogMatch } from '../navidrome.js';
+import { NAVIDROME_LIBRARY_ROOT } from '../config.js';
+import { analysisState } from '../store.js';
+import { subsonicGet } from '../navidrome.js';
+import { pushProgress, pushFilesToNavidrome } from '../navidromePush.js';
 
 const router = express.Router();
-
-// Progression du push en cours — un seul push actif à la fois (single-user), suivi via
-// polling côté frontend (pas de WebSocket ici, même pattern que le scan initial).
-let pushProgress = { active: false, done: 0, total: 0, currentFile: null, stage: null };
 
 // API: Progression du push Navidrome en cours (polling)
 router.get('/api/navidrome/push-progress', (req, res) => {
@@ -63,82 +60,14 @@ router.post('/api/navidrome/push', express.json(), async (req, res) => {
     return res.status(400).json({ error: 'moods requis (au moins un mood sélectionné)' });
   }
 
-  pushProgress = { active: true, done: 0, total: filePaths.length, currentFile: null, stage: 'scan' };
   try {
-    await subsonicGet('startScan.view');
-    const scanned = await waitForScanCompletion();
-    if (!scanned) {
-      return res.status(504).json({ error: 'Scan Navidrome trop long (timeout 30s)' });
-    }
-
-    pushProgress.stage = 'push';
-    const results = [];
-    for (const filePath of filePaths) {
-      const fileName = path.basename(filePath);
-      pushProgress.currentFile = fileName;
-      try {
-        const songId = await findSongIdForFile(filePath);
-        if (!songId) {
-          results.push({ file: fileName, success: false, error: 'Morceau introuvable dans Navidrome après scan' });
-          continue;
-        }
-
-        // Vérifie qu'un morceau équivalent n'est pas déjà catalogué sous un autre chemin
-        const existingMatch = await findExistingCatalogMatch(filePath);
-
-        if (existingMatch) {
-          // Doublon déjà présent : mise en attente dans la playlist "Covers", pas d'ajout aux moods
-          const coverResult = await ensurePlaylistAndAddSong(COVERS_PLAYLIST_NAME, songId);
-          results.push({
-            file: fileName,
-            filePath,
-            success: true,
-            songId,
-            alreadyInLibrary: true,
-            matchedExisting: { title: existingMatch.title, path: existingMatch.path, similarity: existingMatch.similarity },
-            playlists: [coverResult]
-          });
-          continue;
-        }
-
-        const playlistResults = [];
-        for (const mood of moods) {
-          const r = await ensurePlaylistAndAddSong(mood, songId);
-          playlistResults.push(r);
-        }
-        results.push({ file: fileName, filePath, success: true, alreadyInLibrary: false, songId, playlists: playlistResults });
-      } catch (err) {
-        results.push({ file: fileName, filePath, success: false, error: err.message });
-      } finally {
-        pushProgress.done++;
-      }
-    }
-
-    const successResults = results.filter(r => r.success);
-    if (successResults.length > 0) {
-      for (const r of successResults) applyNavidromePushed(r.filePath, true);
-
-      actionLog.push({
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        type: 'navidrome-push',
-        timestamp: new Date().toISOString(),
-        description: `${successResults.length} morceau(x) envoyé(s) vers Navidrome`,
-        data: { pushed: successResults.map(r => ({ filePath: r.filePath, songId: r.songId, playlists: r.playlists })) }
-      });
-      persistProject();
-    }
-
-    const failures = results.filter(r => !r.success);
-    res.json({
-      success: failures.length === 0,
-      pushed: results.filter(r => r.success).length,
-      failed: failures.length,
-      results
-    });
+    const result = await pushFilesToNavidrome(filePaths, moods);
+    res.json(result);
   } catch (err) {
+    if (err.code === 'SCAN_TIMEOUT') {
+      return res.status(504).json({ error: err.message });
+    }
     res.status(500).json({ error: `Push Navidrome échoué : ${err.message}` });
-  } finally {
-    pushProgress = { active: false, done: 0, total: 0, currentFile: null, stage: null };
   }
 });
 

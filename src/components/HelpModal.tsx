@@ -23,57 +23,49 @@ export function HelpModal({ onClose }: { onClose: () => void }) {
         {tab === 'workflow' && (
           <div className="help-body">
             <div className="help-section">
-              <div className="help-section-title">1. Où déposer les nouveaux fichiers</div>
+              <div className="help-section-title">1. Déposer</div>
               <div className="help-workflow-step">
-                Dans un sous-dossier de <code>/home/olivier/Music/NAVIDROME-SUBWAVE-MP/</code> —
-                <strong> jamais ailleurs</strong>. C'est le seul dossier que le conteneur Navidrome
-                voit (monté en <code>/music</code>) ; un fichier déposé hors de ce dossier ne sera
-                jamais indexé, quoi que fasse Nemesis derrière.
-              </div>
-              <div className="help-workflow-step help-workflow-example">
-                Ex : <code>/home/olivier/Music/NAVIDROME-SUBWAVE-MP/13-juil-2026/</code>
+                Dépose tes nouveaux fichiers audio dans <code>/home/olivier/music-import</code>
+                (n'importe quel sous-dossier — <code>PLAYLISTS-RADIO</code> est ignoré). C'est tout :
+                l'onglet <strong>Import</strong> les voit automatiquement au prochain retour sur la fenêtre.
               </div>
             </div>
 
             <div className="help-section">
-              <div className="help-section-title">2. Scanner avec Nemesis</div>
+              <div className="help-section-title">2. Onglet Import</div>
               <div className="help-workflow-step">
-                Bouton <strong>Projets</strong> (en haut) → choisis ce nouveau sous-dossier. Laisse
-                l'analyse tourner (doublons, débit, empreinte audio, paroles) jusqu'à "Terminé".
+                Pré-écoute chaque morceau (bouton play), <strong>Suggérer</strong> lance l'analyse
+                BPM/tonalité (~8s) puis propose des moods via Ollama (pré-cochés, ajustables).
+                Coche les fichiers à envoyer et le(s) mood(s) voulu(s).
               </div>
             </div>
 
             <div className="help-section">
-              <div className="help-section-title">3. Trier et taguer</div>
+              <div className="help-section-title">3. Envoyer vers la radio</div>
               <div className="help-workflow-step">
-                Traite les doublons détectés (groupe par groupe, Autopilot, ou Revue guidée), puis
-                assigne un ou plusieurs <strong>moods</strong> à chaque morceau — colonne "Mood"
-                dans la liste, ou panneau Renommage / Peintre. Un morceau sans mood n'ira dans
-                aucune playlist Navidrome au push.
+                Un seul bouton : Nemesis déplace les fichiers vers
+                <code>NAVIDROME-SUBWAVE-MP/&lt;jj-mois-aaaa&gt;/</code>, relance le scan Navidrome,
+                crée les playlists mood manquantes en <strong>public</strong> et y ajoute les morceaux.
+                Un doublon déjà au catalogue part en playlist <strong>Covers</strong> au lieu des moods.
               </div>
             </div>
 
             <div className="help-section">
-              <div className="help-section-title">4. Envoyer vers Navidrome</div>
+              <div className="help-section-title">4. Vérifier</div>
               <div className="help-workflow-step">
-                Coche <strong>Envoyer vers Navidrome (playlists mood)</strong> dans le panneau
-                Renommage, ou dans "Traiter le groupe". Nemesis relance lui-même le scan Navidrome,
-                retrouve chaque morceau par son titre réel (pas son nom de fichier), crée les
-                playlists mood manquantes en <strong>public</strong> et y ajoute les morceaux.
+                Le résumé sous le bouton dit ce qui est parti où. Côté Navidrome :
+                <code>localhost:4533</code> → Playlists (Songs/Public doivent correspondre).
+                Subwave lit Navidrome sous le même compte — une playlist apparaît côté radio à son
+                prochain rafraîchissement (cache ~30 min, ou redémarre le service Subwave pour forcer).
               </div>
             </div>
 
             <div className="help-section">
-              <div className="help-section-title">5. Vérifier</div>
+              <div className="help-section-title">5. Onglet Curation (occasionnel)</div>
               <div className="help-workflow-step">
-                Colonne "Mood" pour voir ce qui est assigné localement · icône Navidrome (colonne
-                à côté) pour voir ce qui a été poussé · <code>localhost:4533</code> directement
-                pour voir les playlists côté Navidrome (Songs / Public doivent correspondre).
-              </div>
-              <div className="help-workflow-step">
-                Subwave lit Navidrome sous le même compte — une playlist mood apparaît côté radio
-                dès son prochain rafraîchissement (cache ~30 min, ou redémarre le service Subwave
-                pour forcer).
+                L'écran complet historique pour les grosses sessions de tri : détection de doublons
+                (Autopilot, Revue guidée), notes, renommage, trim/fade, quarantaine réversible.
+                Pas nécessaire pour importer des nouveautés.
               </div>
             </div>
           </div>

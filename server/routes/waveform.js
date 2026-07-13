@@ -5,10 +5,9 @@ import { WAVEFORM_CACHE_DIR } from '../config.js';
 import { analysisState } from '../store.js';
 import { probeDuration, runFfmpeg } from '../analysis.js';
 import { waveformCachePathFor } from '../waveformCache.js';
+import { streamAudioWithRange } from '../fsUtils.js';
 
 const router = express.Router();
-
-const MIME_BY_EXT = { '.mp3': 'audio/mpeg', '.flac': 'audio/flac', '.wav': 'audio/wav', '.ogg': 'audio/ogg' };
 
 // API: Sonogrammes de deux fichiers rendus à la MÊME échelle px/seconde (calée sur t=0),
 // pour une comparaison A/B visuelle — pas de corrélation croisée, mais un calage commun au
@@ -113,41 +112,7 @@ router.get('/api/stream/:encodedPath', (req, res) => {
     return res.status(404).json({ error: 'File not found' });
   }
 
-  let stat;
-  try {
-    stat = fs.statSync(file.path);
-  } catch (err) {
-    return res.status(404).json({ error: 'Fichier introuvable sur disque' });
-  }
-
-  const fileSize = stat.size;
-  const range = req.headers.range;
-
-  res.setHeader('Content-Type', MIME_BY_EXT[path.extname(file.path).toLowerCase()] || 'audio/mpeg');
-  res.setHeader('Accept-Ranges', 'bytes');
-
-  let stream;
-  if (range) {
-    const match = range.match(/bytes=(\d*)-(\d*)/);
-    const start = match && match[1] ? parseInt(match[1], 10) : 0;
-    const end = match && match[2] ? parseInt(match[2], 10) : fileSize - 1;
-    const chunkSize = end - start + 1;
-
-    res.status(206);
-    res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
-    res.setHeader('Content-Length', chunkSize);
-    stream = fs.createReadStream(file.path, { start, end });
-  } else {
-    res.setHeader('Content-Length', fileSize);
-    stream = fs.createReadStream(file.path);
-  }
-
-  stream.on('error', () => {
-    if (!res.headersSent) res.status(500);
-    res.end();
-  });
-
-  stream.pipe(res);
+  streamAudioWithRange(req, res, file.path);
 });
 
 export default router;

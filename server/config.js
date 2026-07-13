@@ -38,6 +38,13 @@ export const COVERS_PLAYLIST_NAME = 'Covers';
 export const QUARANTINE_DIR = process.env.QUARANTINE_DIR || '/home/olivier/.nemesis-trash';
 export const QUARANTINE_MANIFEST = path.join(QUARANTINE_DIR, '.manifest.json');
 
+// Boîte de dépôt des nouveaux morceaux (onglet Import) — scan récursif, hors
+// dossiers d'archive listés dans INBOX_EXCLUDE (noms de dossiers de 1er niveau).
+export const INBOX_DIR = process.env.INBOX_DIR || '/home/olivier/music-import';
+export const INBOX_EXCLUDE_DIRS = (process.env.INBOX_EXCLUDE || 'PLAYLISTS-RADIO')
+  .split(',').map(s => s.trim()).filter(Boolean);
+fs.mkdirSync(INBOX_DIR, { recursive: true });
+
 export const WHISPER_PYTHON = path.join(__dirname, 'whisper-venv', 'bin', 'python');
 export const ESSENTIA_PYTHON = process.env.ESSENTIA_PYTHON || '/home/olivier/essentia-venv/bin/python3';
 export const ANALYZE_AUDIO_SCRIPT = path.join(__dirname, 'analyze_audio.py');
