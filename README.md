@@ -240,6 +240,8 @@ Un watchdog (timer systemd + `GET /api/status`) est recommandé pour redémarrer
 - [ ] Support d'autres formats (FLAC, WAV, OGG)
 - [x] Tests E2E
 - [x] Parallélisation fingerprint (pool de workers `fpcalc`)
+- [x] Suggestion de mood via Ollama (paroles/BPM → 1-3 moods)
+- [x] Autopilot des groupes de doublons à haute confiance
 
 ## Licence
 
