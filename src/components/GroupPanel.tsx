@@ -24,6 +24,7 @@ interface GroupPanelProps {
   analyzingPaths: Set<string>;
   playingFilePath: string | null;
   reviewProgress?: { index: number; total: number } | null;
+  navidromeProgress?: { done: number; total: number; currentFile: string | null } | null;
   onClose: () => void;
   onToggleKeep: (filePath: string) => void;
   onPlay: (filePath: string) => void;
@@ -48,7 +49,7 @@ interface GroupPanelProps {
 export function GroupPanel({
   group, keepPaths, availableMoods, groupQuarantine, groupRename, groupNavidrome,
   groupAuthor, groupTitle, groupMoods, groupNotice, groupProcessing,
-  generatingAuthor, generatingTitle, generatingMood, analyzingPaths, playingFilePath, reviewProgress,
+  generatingAuthor, generatingTitle, generatingMood, analyzingPaths, playingFilePath, reviewProgress, navidromeProgress,
   onClose, onToggleKeep, onPlay, onRate, onOpenWaveformEditor, onQuickQuarantine,
   onOpenInfo, onAnalyzeAudio, onSetGroupQuarantine, onSetGroupRename, onSetGroupNavidrome,
   onSetGroupAuthor, onSetGroupTitle, onGenerateAuthor, onGenerateTitle, onGenerateMood, onToggleGroupMood,
@@ -228,7 +229,11 @@ export function GroupPanel({
             Ignorer ce groupe
           </button>
           <button className="modal-btn" onClick={onApply} disabled={groupProcessing}>
-            {groupProcessing ? 'Traitement…' : 'Appliquer'}
+            {groupProcessing
+              ? navidromeProgress
+                ? `Envoi Navidrome… ${navidromeProgress.done}/${navidromeProgress.total}`
+                : 'Traitement…'
+              : 'Appliquer'}
           </button>
         </div>
       </div>

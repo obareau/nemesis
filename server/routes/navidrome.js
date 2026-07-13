@@ -2,9 +2,18 @@ import express from 'express';
 import path from 'path';
 import { NAVIDROME_LIBRARY_ROOT, COVERS_PLAYLIST_NAME } from '../config.js';
 import { analysisState, actionLog, persistProject, applyNavidromePushed } from '../store.js';
-import { subsonicGet, waitForScanCompletion, findSongIdByName, ensurePlaylistAndAddSong, findExistingCatalogMatch } from '../navidrome.js';
+import { subsonicGet, waitForScanCompletion, findSongIdForFile, ensurePlaylistAndAddSong, findExistingCatalogMatch } from '../navidrome.js';
 
 const router = express.Router();
+
+// Progression du push en cours — un seul push actif à la fois (single-user), suivi via
+// polling côté frontend (pas de WebSocket ici, même pattern que le scan initial).
+let pushProgress = { active: false, done: 0, total: 0, currentFile: null, stage: null };
+
+// API: Progression du push Navidrome en cours (polling)
+router.get('/api/navidrome/push-progress', (req, res) => {
+  res.json(pushProgress);
+});
 
 // API: Contenu d'une playlist mood Navidrome — pour le panneau "voir ce qui est déjà dans ce mood"
 router.get('/api/navidrome/mood/:mood', async (req, res) => {
@@ -54,6 +63,7 @@ router.post('/api/navidrome/push', express.json(), async (req, res) => {
     return res.status(400).json({ error: 'moods requis (au moins un mood sélectionné)' });
   }
 
+  pushProgress = { active: true, done: 0, total: filePaths.length, currentFile: null, stage: 'scan' };
   try {
     await subsonicGet('startScan.view');
     const scanned = await waitForScanCompletion();
@@ -61,11 +71,13 @@ router.post('/api/navidrome/push', express.json(), async (req, res) => {
       return res.status(504).json({ error: 'Scan Navidrome trop long (timeout 30s)' });
     }
 
+    pushProgress.stage = 'push';
     const results = [];
     for (const filePath of filePaths) {
       const fileName = path.basename(filePath);
+      pushProgress.currentFile = fileName;
       try {
-        const songId = await findSongIdByName(fileName);
+        const songId = await findSongIdForFile(filePath);
         if (!songId) {
           results.push({ file: fileName, success: false, error: 'Morceau introuvable dans Navidrome après scan' });
           continue;
@@ -97,6 +109,8 @@ router.post('/api/navidrome/push', express.json(), async (req, res) => {
         results.push({ file: fileName, filePath, success: true, alreadyInLibrary: false, songId, playlists: playlistResults });
       } catch (err) {
         results.push({ file: fileName, filePath, success: false, error: err.message });
+      } finally {
+        pushProgress.done++;
       }
     }
 
@@ -123,6 +137,8 @@ router.post('/api/navidrome/push', express.json(), async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: `Push Navidrome échoué : ${err.message}` });
+  } finally {
+    pushProgress = { active: false, done: 0, total: 0, currentFile: null, stage: null };
   }
 });
 

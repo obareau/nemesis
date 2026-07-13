@@ -105,6 +105,7 @@ function App() {
   const [renaming, setRenaming] = useState(false);
   const [pushToNavidrome, setPushToNavidrome] = useState(false);
   const [pushingNavidrome, setPushingNavidrome] = useState(false);
+  const [navidromeProgress, setNavidromeProgress] = useState<{ done: number; total: number; currentFile: string | null } | null>(null);
   const [similarMin, setSimilarMin] = useState(80);
   const [similarMax, setSimilarMax] = useState(95);
   const [showSimilar, setShowSimilar] = useState(false);
@@ -197,6 +198,21 @@ function App() {
   const showTopNotice = (msg: string) => {
     setTopNotice(msg);
     setTimeout(() => setTopNotice(null), 5000);
+  };
+
+  // Sondage de la progression du push Navidrome (rescan + recherche + ajout playlist
+  // par fichier peut prendre du temps) — appelant doit clearInterval le retour une fois
+  // le fetch du push terminé (finally), sans quoi le sondage continuerait indéfiniment.
+  const pollNavidromeProgress = () => {
+    return setInterval(async () => {
+      try {
+        const res = await api.getNavidromePushProgress();
+        const data = await res.json();
+        setNavidromeProgress(data.active ? { done: data.done, total: data.total, currentFile: data.currentFile } : null);
+      } catch {
+        // sondage best-effort — pas bloquant si ça échoue ponctuellement
+      }
+    }, 400);
   };
   const [confirmDeleteProject, setConfirmDeleteProject] = useState<string | null>(null);
   const [deletingProject, setDeletingProject] = useState(false);
@@ -829,6 +845,7 @@ function App() {
 
       if (pushToNavidrome && newPaths.length > 0 && moodsArray.length > 0) {
         setPushingNavidrome(true);
+        const interval = pollNavidromeProgress();
         try {
           const pushRes = await api.navidromePush(newPaths, moodsArray);
           const pushData = await pushRes.json();
@@ -842,6 +859,8 @@ function App() {
         } catch (err) {
           notice += ` · ⚠️ Navidrome: ${String(err instanceof Error ? err.message : err)}`;
         } finally {
+          clearInterval(interval);
+          setNavidromeProgress(null);
           setPushingNavidrome(false);
         }
       }
@@ -1080,11 +1099,17 @@ function App() {
 
       // 3. Envoi vers Navidrome (playlists mood, détection déjà-présent → Covers)
       if (groupNavidrome && keptPaths.length > 0) {
-        const res = await api.navidromePush(keptPaths, Array.from(groupMoods));
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Échec push Navidrome');
-        const covered = data.results.filter((r: { alreadyInLibrary?: boolean }) => r.alreadyInLibrary).length;
-        report.push(`Navidrome: ${data.pushed - covered} vers moods${covered ? `, ${covered} → Covers` : ''}`);
+        const interval = pollNavidromeProgress();
+        try {
+          const res = await api.navidromePush(keptPaths, Array.from(groupMoods));
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'Échec push Navidrome');
+          const covered = data.results.filter((r: { alreadyInLibrary?: boolean }) => r.alreadyInLibrary).length;
+          report.push(`Navidrome: ${data.pushed - covered} vers moods${covered ? `, ${covered} → Covers` : ''}`);
+        } finally {
+          clearInterval(interval);
+          setNavidromeProgress(null);
+        }
       }
 
       // Marque le groupe traité (persisté côté serveur) et ferme (ou avance à la revue suivante)
@@ -2046,8 +2071,17 @@ function App() {
                 onClick={handleBulkRename}
                 disabled={renaming || pushingNavidrome || selectedFiles.size === 0}
               >
-                {renaming ? 'Renommage…' : pushingNavidrome ? 'Envoi Navidrome…' : `Renommer la sélection (${selectedFiles.size})`}
+                {renaming
+                  ? 'Renommage…'
+                  : pushingNavidrome
+                  ? navidromeProgress
+                    ? `Envoi Navidrome… ${navidromeProgress.done}/${navidromeProgress.total}`
+                    : 'Envoi Navidrome… scan'
+                  : `Renommer la sélection (${selectedFiles.size})`}
               </button>
+              {pushingNavidrome && navidromeProgress?.currentFile && (
+                <div className="navidrome-push-current">→ {navidromeProgress.currentFile}</div>
+              )}
               {renameNotice && <div className="rename-notice">{renameNotice}</div>}
             </div>
           </section>
@@ -2215,6 +2249,7 @@ function App() {
                 </button>
                 <span className="col-rename" />
                 <span className="col-navidrome" />
+                <span className="col-moods">Mood</span>
                 <span className="col-lyrics-state" />
                 <button className="col-plays col-sortable" onClick={() => toggleSort('plays')} title="Nombre d'écoutes">
                   ▶ {sortKey === 'plays' && (sortDir === 'asc' ? '▲' : '▼')}
@@ -2292,6 +2327,14 @@ function App() {
                       title={file.pushedToNavidrome ? 'Déjà envoyé vers Navidrome' : 'Pas encore envoyé vers Navidrome'}
                     >
                       {file.pushedToNavidrome && <NavidromeIcon size={12} />}
+                    </span>
+                    <span
+                      className="col-moods"
+                      title={file.moods?.length ? file.moods.join(', ') : 'Aucun mood assigné'}
+                    >
+                      {file.moods?.map(m => (
+                        <span key={m} className="mood-dot-mini" style={{ background: moodColor(m) }} />
+                      ))}
                     </span>
                     <button
                       className={`col-lyrics-state state-${lyricsState}`}
@@ -2715,6 +2758,7 @@ function App() {
           analyzingPaths={analyzingPaths}
           playingFilePath={playingFilePath}
           reviewProgress={reviewActive ? { index: reviewIndex, total: reviewQueue.length } : null}
+          navidromeProgress={navidromeProgress}
           onClose={closeGroupPanel}
           onToggleKeep={toggleKeep}
           onPlay={playFileByPath}

@@ -203,6 +203,10 @@ export function navidromePush(filePaths: string[], moods: string[]) {
   return postJson('/navidrome/push', { filePaths, moods });
 }
 
+export function getNavidromePushProgress() {
+  return fetch(`${API}/navidrome/push-progress`);
+}
+
 export function skipGroup(method: string, filePaths: string[]) {
   return postJson('/groups/skip', { method, filePaths });
 }
