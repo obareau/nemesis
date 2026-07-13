@@ -37,7 +37,7 @@ export function ImportPanel({ availableMoods }: { availableMoods: string[] }) {
   const [sendProgress, setSendProgress] = useState<{ done: number; total: number; currentFile: string | null } | null>(null);
   const [sendResult, setSendResult] = useState<SendResult | null>(null);
   const [batchAnalyzing, setBatchAnalyzing] = useState(false);
-  const [batchProgress, setBatchProgress] = useState({ done: 0, total: 0 });
+  const [batchProgress, setBatchProgress] = useState<{ done: number; total: number; currentFile: string | null }>({ done: 0, total: 0, currentFile: null });
   const batchCancelRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement>(null);
 
@@ -136,17 +136,18 @@ export function ImportPanel({ availableMoods }: { availableMoods: string[] }) {
   // (pas Promise.all) pour ne pas saturer la machine avec N process Essentia en parallèle,
   // annulable en cours de route (même pattern que "Analyser tout" côté Curation).
   const analyzeAllPending = async () => {
-    const pending = files.filter(f => !analysis[f.path]).map(f => f.path);
+    const pending = files.filter(f => !analysis[f.path]);
     if (pending.length === 0 || batchAnalyzing) return;
 
     batchCancelRef.current = false;
     setBatchAnalyzing(true);
-    setBatchProgress({ done: 0, total: pending.length });
+    setBatchProgress({ done: 0, total: pending.length, currentFile: pending[0].name });
 
     for (let i = 0; i < pending.length; i++) {
       if (batchCancelRef.current) break;
-      await analyzeAndSuggest(pending[i], false);
-      setBatchProgress({ done: i + 1, total: pending.length });
+      setBatchProgress(prev => ({ ...prev, currentFile: pending[i].name }));
+      await analyzeAndSuggest(pending[i].path, false);
+      setBatchProgress({ done: i + 1, total: pending.length, currentFile: pending[i + 1]?.name ?? null });
     }
 
     setBatchAnalyzing(false);
@@ -224,6 +225,21 @@ export function ImportPanel({ availableMoods }: { availableMoods: string[] }) {
         )}
         <span className="import-count">{files.length} fichier(s) en attente</span>
       </div>
+
+      {batchAnalyzing && (
+        <div className="import-batch-progress">
+          <div className="progress-bar">
+            <div
+              className="progress-fill"
+              style={{ width: `${batchProgress.total ? Math.round((batchProgress.done / batchProgress.total) * 100) : 0}%` }}
+            />
+          </div>
+          <span className="import-batch-progress-label">
+            {batchProgress.done}/{batchProgress.total}
+            {batchProgress.currentFile && ` — analyse en cours : ${batchProgress.currentFile}`}
+          </span>
+        </div>
+      )}
 
       {loadError && <div className="import-error"><WarnIcon size={12} /> {loadError}</div>}
 
@@ -330,6 +346,22 @@ export function ImportPanel({ availableMoods }: { availableMoods: string[] }) {
               : 'Envoi… déplacement + scan'
             : `🚀 Envoyer vers la radio (${selected.size})`}
         </button>
+
+        {sending && (
+          <div className="import-batch-progress">
+            <div className="progress-bar">
+              <div
+                className={`progress-fill ${!sendProgress || !sendProgress.total ? 'indeterminate' : ''}`}
+                style={sendProgress?.total ? { width: `${Math.round((sendProgress.done / sendProgress.total) * 100)}%` } : undefined}
+              />
+            </div>
+            <span className="import-batch-progress-label">
+              {sendProgress?.total
+                ? `${sendProgress.done}/${sendProgress.total}${sendProgress.currentFile ? ` — ${sendProgress.currentFile}` : ''}`
+                : 'Déplacement des fichiers + scan Navidrome…'}
+            </span>
+          </div>
+        )}
 
         {sendResult && (
           <div className={`import-summary ${sendResult.success ? 'ok' : 'warn'}`}>

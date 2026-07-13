@@ -611,6 +611,31 @@ button, input, select {
 .import-send-btn:hover:not(:disabled) { filter: brightness(1.1); }
 .import-send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
+.import-batch-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.import-batch-progress .progress-bar { width: 100%; max-width: 420px; }
+
+.import-batch-progress-label {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.progress-fill.indeterminate {
+  width: 40% !important;
+  animation: import-indeterminate 1.2s ease-in-out infinite;
+}
+
+@keyframes import-indeterminate {
+  0% { margin-left: 0%; }
+  50% { margin-left: 60%; }
+  100% { margin-left: 0%; }
+}
+
 .import-summary {
   font-size: 12px;
   line-height: 1.6;
