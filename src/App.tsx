@@ -50,6 +50,10 @@ function groupConfidence(dup: Duplicate): number {
   return Math.round(score);
 }
 
+// Seuil de confiance à partir duquel l'autopilot traite un groupe sans intervention —
+// volontairement élevé (quasi-certitude) puisqu'aucun jugement humain n'est demandé.
+const AUTOPILOT_THRESHOLD = 95;
+
 function App() {
   const [state, setState] = useState<AnalysisState>({
     status: 'idle',
@@ -75,6 +79,7 @@ function App() {
   const [availableMoods, setAvailableMoods] = useState<string[]>(DEFAULT_MOODS);
   const [generatingAuthor, setGeneratingAuthor] = useState(false);
   const [generatingTitle, setGeneratingTitle] = useState(false);
+  const [generatingMood, setGeneratingMood] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [pushToNavidrome, setPushToNavidrome] = useState(false);
   const [pushingNavidrome, setPushingNavidrome] = useState(false);
@@ -82,6 +87,7 @@ function App() {
   const [similarMax, setSimilarMax] = useState(95);
   const [showSimilar, setShowSimilar] = useState(false);
   const [sortByConfidence, setSortByConfidence] = useState(false);
+  const [autopilotRunning, setAutopilotRunning] = useState(false);
   const [openMood, setOpenMood] = useState<string | null>(null);
   const [moodPanelTracks, setMoodPanelTracks] = useState<MoodTrack[]>([]);
   const [moodPanelLoading, setMoodPanelLoading] = useState(false);
@@ -952,6 +958,26 @@ function App() {
     }
   };
 
+  const generateGroupMood = async () => {
+    if (!workingGroup) return;
+    setGeneratingMood(true);
+    try {
+      const withLyrics = workingGroup.files.find(f => f.lyrics && f.lyrics.trim());
+      const withBpm = workingGroup.files.find(f => f.bpm);
+      if (!withLyrics && !withBpm) {
+        throw new Error('Aucune parole ni BPM/tonalité analysé pour ce groupe');
+      }
+      const res = await api.generateMood(withLyrics?.lyrics || '', withBpm?.bpm, withBpm?.key, withBpm?.scale);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Échec génération');
+      setGroupMoods(new Set(data.moods));
+    } catch (err) {
+      setGroupNotice(`⚠️ ${String(err instanceof Error ? err.message : err)}`);
+    } finally {
+      setGeneratingMood(false);
+    }
+  };
+
   // Applique le traitement du groupe : quarantaine des écartés → renommage des gardés → push Navidrome
   const applyGroup = async () => {
     if (!workingGroup) return;
@@ -1032,6 +1058,62 @@ function App() {
     }
     setProcessedGroups(prev => new Set(prev).add(groupSignature(workingGroup)));
     setWorkingGroup(null);
+  };
+
+  // Autopilot : traite en rafale les groupes à confiance >= AUTOPILOT_THRESHOLD sans
+  // passage manuel — garde le fichier le plus gros (heuristique qualité, départage par
+  // date de création la plus ancienne = probablement l'original), quarantaine le reste
+  // (réversible via undo/restauration comme n'importe quelle quarantaine).
+  const runAutopilot = async () => {
+    const candidates = state.duplicates.filter(dup =>
+      !processedGroups.has(groupSignature(dup)) && groupConfidence(dup) >= AUTOPILOT_THRESHOLD
+    );
+
+    if (candidates.length === 0) {
+      showTopNotice(`Aucun groupe à ${AUTOPILOT_THRESHOLD}%+ de confiance pour l'instant`);
+      return;
+    }
+    if (!window.confirm(
+      `Traiter automatiquement ${candidates.length} groupe(s) à ${AUTOPILOT_THRESHOLD}%+ de confiance ?\n` +
+      `Le fichier le plus gros de chaque groupe est gardé, les autres partent en quarantaine (réversible).`
+    )) {
+      return;
+    }
+
+    setAutopilotRunning(true);
+    try {
+      const discardPaths: string[] = [];
+      for (const dup of candidates) {
+        const sorted = [...dup.files].sort((a, b) => b.size - a.size || a.mtime - b.mtime);
+        discardPaths.push(...sorted.slice(1).map(f => f.path));
+      }
+
+      if (discardPaths.length > 0) {
+        const res = await api.quarantine(discardPaths);
+        if (!res.ok) throw new Error((await res.json()).error || 'Échec quarantaine');
+      }
+
+      for (const dup of candidates) {
+        await api.skipGroup(dup.method, dup.files.map(f => f.path));
+      }
+      setProcessedGroups(prev => {
+        const next = new Set(prev);
+        candidates.forEach(dup => next.add(groupSignature(dup)));
+        return next;
+      });
+
+      const statusRes = await api.getStatus();
+      const newState = await statusRes.json();
+      setState(newState);
+      if (Array.isArray(newState.processedGroups)) setProcessedGroups(new Set(newState.processedGroups));
+      loadQuarantineCount();
+
+      showTopNotice(`✓ Autopilot : ${candidates.length} groupe(s) traité(s), ${discardPaths.length} fichier(s) en quarantaine`);
+    } catch (err) {
+      showTopNotice(`⚠️ ${String(err instanceof Error ? err.message : err)}`);
+    } finally {
+      setAutopilotRunning(false);
+    }
   };
 
   const loadQuarantineCount = async () => {
@@ -2182,6 +2264,16 @@ function App() {
                     🎯 Confiance
                   </button>
                 )}
+                {!showSimilar && filteredDuplicates.length > 0 && (
+                  <button
+                    className="autopilot-btn"
+                    onClick={runAutopilot}
+                    disabled={autopilotRunning}
+                    title={`Traite automatiquement les groupes à ${AUTOPILOT_THRESHOLD}%+ de confiance : garde le plus gros fichier, quarantaine le reste (réversible)`}
+                  >
+                    {autopilotRunning ? '…autopilot' : '🚀 Autopilot'}
+                  </button>
+                )}
                 <span className="panel-count">
                   {showSimilar ? filteredSimilarPairs.length : filteredDuplicates.length}
                 </span>
@@ -2491,6 +2583,7 @@ function App() {
           groupProcessing={groupProcessing}
           generatingAuthor={generatingAuthor}
           generatingTitle={generatingTitle}
+          generatingMood={generatingMood}
           analyzingPaths={analyzingPaths}
           playingFilePath={playingFilePath}
           onClose={() => setWorkingGroup(null)}
@@ -2508,6 +2601,7 @@ function App() {
           onSetGroupTitle={setGroupTitle}
           onGenerateAuthor={generateGroupAuthor}
           onGenerateTitle={generateGroupTitle}
+          onGenerateMood={generateGroupMood}
           onToggleGroupMood={toggleGroupMood}
           onSkip={skipGroup}
           onApply={applyGroup}

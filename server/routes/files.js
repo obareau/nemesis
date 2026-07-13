@@ -2,7 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import NodeID3 from 'node-id3';
-import { OLLAMA_URL, OLLAMA_MODEL, EDITS_BACKUP_DIR } from '../config.js';
+import { OLLAMA_URL, OLLAMA_MODEL, EDITS_BACKUP_DIR, SHOW_MOODS } from '../config.js';
 import {
   analysisState, actionLog, persistProject, applyAudioFeatures, applyLyrics
 } from '../store.js';
@@ -387,6 +387,67 @@ Réponds uniquement au format JSON strict : {"title": "..."}`;
     if (!title) throw new Error('Réponse Ollama vide ou invalide');
 
     res.json({ title: title.trim() });
+  } catch (err) {
+    res.status(500).json({ error: `Génération échouée : ${err.message}` });
+  }
+});
+
+// API: Suggestion de mood(s) via Ollama local, à partir des paroles et du BPM/tonalité déjà
+// analysés — évite de parcourir les 17 moods à la main pour chaque groupe. Contraint à la
+// liste canonique SHOW_MOODS : toute suggestion hors-liste (hallucination du modèle) est filtrée.
+router.post('/api/generate-mood', express.json(), async (req, res) => {
+  const { lyrics = '', bpm, key, scale } = req.body;
+
+  if (!lyrics.trim() && !bpm) {
+    return res.status(400).json({ error: 'lyrics ou bpm/tonalité requis (aucun signal disponible pour ce fichier)' });
+  }
+
+  const signals = [];
+  if (lyrics.trim()) signals.push(`Paroles (extrait, transcription automatique) : "${lyrics.slice(0, 400)}"`);
+  if (bpm) signals.push(`BPM : ${bpm}${key ? ` · Tonalité : ${key}${scale === 'minor' ? 'm' : ''}` : ''}`);
+
+  const prompt = `Tu choisis l'ambiance (mood) d'un morceau pour une radio IA, à partir des signaux suivants :
+${signals.join('\n')}
+
+Choisis entre 1 et 3 moods qui correspondent le mieux, EXCLUSIVEMENT parmi cette liste (recopie les mots exactement, en anglais, minuscules) :
+${SHOW_MOODS.join(', ')}
+
+Réponds uniquement au format JSON strict : {"moods": ["...", "..."]}`;
+
+  try {
+    const response = await fetch(`${OLLAMA_URL}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: OLLAMA_MODEL,
+        prompt,
+        stream: false,
+        format: 'json'
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Ollama a répondu ${response.status}`);
+    }
+
+    const data = await response.json();
+    let rawMoods = [];
+    try {
+      rawMoods = JSON.parse(data.response).moods;
+    } catch {
+      // Fallback si le modèle n'a pas respecté le JSON strict : cherche les moods connus dans le texte brut
+      rawMoods = SHOW_MOODS.filter(m => data.response.toLowerCase().includes(m));
+    }
+    if (!Array.isArray(rawMoods)) rawMoods = [];
+
+    // Filtre les hallucinations : seuls les moods de la liste canonique (insensible à la casse) survivent
+    const validMoods = SHOW_MOODS.filter(m =>
+      rawMoods.some(r => typeof r === 'string' && r.trim().toLowerCase() === m)
+    ).slice(0, 3);
+
+    if (validMoods.length === 0) throw new Error('Aucun mood valide dans la réponse Ollama');
+
+    res.json({ moods: validMoods });
   } catch (err) {
     res.status(500).json({ error: `Génération échouée : ${err.message}` });
   }

@@ -238,7 +238,6 @@ Un watchdog (timer systemd + `GET /api/status`) est recommandé pour redémarrer
 ## Roadmap
 
 - [ ] Support d'autres formats (FLAC, WAV, OGG)
-- [ ] Export ZIP des résultats
 - [x] Tests E2E
 - [x] Parallélisation fingerprint (pool de workers `fpcalc`)
 

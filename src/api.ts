@@ -188,6 +188,10 @@ export function generateTitle(lyrics: string) {
   return postJson('/generate-title', { lyrics });
 }
 
+export function generateMood(lyrics: string, bpm?: number, key?: string, scale?: string) {
+  return postJson('/generate-mood', { lyrics, bpm, key, scale });
+}
+
 export function navidromePush(filePaths: string[], moods: string[]) {
   return postJson('/navidrome/push', { filePaths, moods });
 }

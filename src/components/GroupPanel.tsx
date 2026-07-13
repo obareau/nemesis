@@ -20,6 +20,7 @@ interface GroupPanelProps {
   groupProcessing: boolean;
   generatingAuthor: boolean;
   generatingTitle: boolean;
+  generatingMood: boolean;
   analyzingPaths: Set<string>;
   playingFilePath: string | null;
   onClose: () => void;
@@ -37,6 +38,7 @@ interface GroupPanelProps {
   onSetGroupTitle: (value: string) => void;
   onGenerateAuthor: () => void;
   onGenerateTitle: () => void;
+  onGenerateMood: () => void;
   onToggleGroupMood: (mood: string) => void;
   onSkip: () => void;
   onApply: () => void;
@@ -45,10 +47,10 @@ interface GroupPanelProps {
 export function GroupPanel({
   group, keepPaths, availableMoods, groupQuarantine, groupRename, groupNavidrome,
   groupAuthor, groupTitle, groupMoods, groupNotice, groupProcessing,
-  generatingAuthor, generatingTitle, analyzingPaths, playingFilePath,
+  generatingAuthor, generatingTitle, generatingMood, analyzingPaths, playingFilePath,
   onClose, onToggleKeep, onPlay, onRate, onOpenWaveformEditor, onQuickQuarantine,
   onOpenInfo, onAnalyzeAudio, onSetGroupQuarantine, onSetGroupRename, onSetGroupNavidrome,
-  onSetGroupAuthor, onSetGroupTitle, onGenerateAuthor, onGenerateTitle, onToggleGroupMood,
+  onSetGroupAuthor, onSetGroupTitle, onGenerateAuthor, onGenerateTitle, onGenerateMood, onToggleGroupMood,
   onSkip, onApply
 }: GroupPanelProps) {
   return (
@@ -182,7 +184,16 @@ export function GroupPanel({
           </label>
 
           {(groupNavidrome || groupRename) && (
-            <div className="mood-checkboxes">
+            <>
+              <button
+                className="generate-btn generate-mood-btn"
+                onClick={onGenerateMood}
+                disabled={generatingMood}
+                title="Suggérer le(s) mood(s) via Ollama, à partir des paroles et du BPM/tonalité déjà analysés"
+              >
+                {generatingMood ? '…' : <SparkleIcon />} Suggérer via Ollama
+              </button>
+              <div className="mood-checkboxes">
               {availableMoods.map((m) => (
                 <button
                   key={m}
@@ -198,7 +209,8 @@ export function GroupPanel({
                   {m}
                 </button>
               ))}
-            </div>
+              </div>
+            </>
           )}
         </div>
 
