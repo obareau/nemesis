@@ -558,7 +558,14 @@ button, input, select {
   padding-left: 34px;
   font-size: 10.5px;
   color: var(--text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
 }
+
+.import-suggested:hover { color: var(--accent); }
 
 .import-row-notice {
   flex-basis: 100%;

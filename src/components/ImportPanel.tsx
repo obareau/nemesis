@@ -36,6 +36,9 @@ export function ImportPanel({ availableMoods }: { availableMoods: string[] }) {
   const [sending, setSending] = useState(false);
   const [sendProgress, setSendProgress] = useState<{ done: number; total: number; currentFile: string | null } | null>(null);
   const [sendResult, setSendResult] = useState<SendResult | null>(null);
+  const [batchAnalyzing, setBatchAnalyzing] = useState(false);
+  const [batchProgress, setBatchProgress] = useState({ done: 0, total: 0 });
+  const batchCancelRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement>(null);
 
   const loadInbox = useCallback(async () => {
@@ -92,7 +95,11 @@ export function ImportPanel({ availableMoods }: { availableMoods: string[] }) {
     }
   };
 
-  const analyzeAndSuggest = async (path: string) => {
+  // mergeIntoSelection : pré-coche la suggestion dans les chips partagées — pertinent pour
+  // un clic isolé (un seul fichier de front), mais PAS pour l'analyse en masse (241 fichiers
+  // aux ambiances différentes → l'union de toutes leurs suggestions dans un seul jeu de
+  // chips partagé n'aurait aucun sens, chaque fichier garde sa suggestion visible en ligne).
+  const analyzeAndSuggest = async (path: string, mergeIntoSelection = true) => {
     setAnalyzing(prev => new Set(prev).add(path));
     setRowNotices(prev => ({ ...prev, [path]: '' }));
     try {
@@ -106,8 +113,10 @@ export function ImportPanel({ availableMoods }: { availableMoods: string[] }) {
         const moodData = await moodRes.json();
         if (!moodRes.ok) throw new Error(moodData.error || 'Échec suggestion');
         setSuggested(prev => ({ ...prev, [path]: moodData.moods }));
-        // Union dans la sélection partagée — la suggestion pré-coche, l'utilisateur ajuste
-        setSelectedMoods(prev => new Set([...prev, ...moodData.moods]));
+        if (mergeIntoSelection) {
+          // Union dans la sélection partagée — la suggestion pré-coche, l'utilisateur ajuste
+          setSelectedMoods(prev => new Set([...prev, ...moodData.moods]));
+        }
       } catch (err) {
         // BPM acquis mais suggestion Ollama ratée — garde le BPM, signale la suggestion
         setRowNotices(prev => ({ ...prev, [path]: `⚠️ Suggestion : ${String(err instanceof Error ? err.message : err)}` }));
@@ -121,6 +130,30 @@ export function ImportPanel({ availableMoods }: { availableMoods: string[] }) {
         return next;
       });
     }
+  };
+
+  // Analyse + suggère en masse tous les fichiers pas encore passés au crible — séquentiel
+  // (pas Promise.all) pour ne pas saturer la machine avec N process Essentia en parallèle,
+  // annulable en cours de route (même pattern que "Analyser tout" côté Curation).
+  const analyzeAllPending = async () => {
+    const pending = files.filter(f => !analysis[f.path]).map(f => f.path);
+    if (pending.length === 0 || batchAnalyzing) return;
+
+    batchCancelRef.current = false;
+    setBatchAnalyzing(true);
+    setBatchProgress({ done: 0, total: pending.length });
+
+    for (let i = 0; i < pending.length; i++) {
+      if (batchCancelRef.current) break;
+      await analyzeAndSuggest(pending[i], false);
+      setBatchProgress({ done: i + 1, total: pending.length });
+    }
+
+    setBatchAnalyzing(false);
+  };
+
+  const cancelBatchAnalyze = () => {
+    batchCancelRef.current = true;
   };
 
   const toggleMood = (m: string) => {
@@ -174,6 +207,21 @@ export function ImportPanel({ availableMoods }: { availableMoods: string[] }) {
         <button className="top-btn" onClick={loadInbox} disabled={loading}>
           {loading ? '…' : '⟳ Rafraîchir'}
         </button>
+        {files.some(f => !analysis[f.path]) && (
+          batchAnalyzing ? (
+            <button className="bpm-batch-btn analyzing" onClick={cancelBatchAnalyze} title="Annuler l'analyse en cours">
+              …{batchProgress.done}/{batchProgress.total} — annuler
+            </button>
+          ) : (
+            <button
+              className="bpm-batch-btn"
+              onClick={analyzeAllPending}
+              title="Analyse le BPM/tonalité de tous les fichiers pas encore passés au crible puis suggère un mood pour chacun (via Ollama) — ~8s/fichier, séquentiel"
+            >
+              🎵 Analyser + suggérer tout
+            </button>
+          )
+        )}
         <span className="import-count">{files.length} fichier(s) en attente</span>
       </div>
 
@@ -230,12 +278,20 @@ export function ImportPanel({ availableMoods }: { availableMoods: string[] }) {
                 </button>
               </span>
               {suggested[f.path] && (
-                <span className="import-suggested">
+                <button
+                  type="button"
+                  className="import-suggested"
+                  onClick={() => {
+                    setSelected(prev => new Set(prev).add(f.path));
+                    setSelectedMoods(prev => new Set([...prev, ...suggested[f.path]]));
+                  }}
+                  title="Cocher ce fichier et ajouter cette suggestion aux moods sélectionnés en bas"
+                >
                   {suggested[f.path].map(m => (
                     <span key={m} className="mood-dot-mini" style={{ background: moodColor(m) }} title={m} />
                   ))}
                   {suggested[f.path].join(', ')}
-                </span>
+                </button>
               )}
               {rowNotices[f.path] && <span className="import-row-notice">{rowNotices[f.path]}</span>}
             </div>

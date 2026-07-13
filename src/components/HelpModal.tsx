@@ -35,8 +35,11 @@ export function HelpModal({ onClose }: { onClose: () => void }) {
               <div className="help-section-title">2. Onglet Import</div>
               <div className="help-workflow-step">
                 Pré-écoute chaque morceau (bouton play), <strong>Suggérer</strong> lance l'analyse
-                BPM/tonalité (~8s) puis propose des moods via Ollama (pré-cochés, ajustables).
-                Coche les fichiers à envoyer et le(s) mood(s) voulu(s).
+                BPM/tonalité (~8s) puis propose des moods via Ollama — pré-coché pour ce fichier
+                seul. <strong>Analyser + suggérer tout</strong> (en haut) fait pareil sur toute la
+                liste en fond, annulable, sans rien pré-cocher (des dizaines de fichiers aux
+                ambiances différentes n'ont pas à finir dans le même jeu de moods) : clique la
+                ligne "suggéré" d'un morceau pour le cocher et reprendre son mood.
               </div>
             </div>
 
