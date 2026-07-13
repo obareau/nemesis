@@ -38,6 +38,7 @@ export function ImportPanel({ availableMoods }: { availableMoods: string[] }) {
   const [sendResult, setSendResult] = useState<SendResult | null>(null);
   const [batchAnalyzing, setBatchAnalyzing] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number; currentFile: string | null }>({ done: 0, total: 0, currentFile: null });
+  const [batchSummary, setBatchSummary] = useState<{ done: number; failed: number; cancelled: boolean } | null>(null);
   const batchCancelRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement>(null);
 
@@ -99,7 +100,7 @@ export function ImportPanel({ availableMoods }: { availableMoods: string[] }) {
   // un clic isolé (un seul fichier de front), mais PAS pour l'analyse en masse (241 fichiers
   // aux ambiances différentes → l'union de toutes leurs suggestions dans un seul jeu de
   // chips partagé n'aurait aucun sens, chaque fichier garde sa suggestion visible en ligne).
-  const analyzeAndSuggest = async (path: string, mergeIntoSelection = true) => {
+  const analyzeAndSuggest = async (path: string, mergeIntoSelection = true): Promise<boolean> => {
     setAnalyzing(prev => new Set(prev).add(path));
     setRowNotices(prev => ({ ...prev, [path]: '' }));
     try {
@@ -121,8 +122,10 @@ export function ImportPanel({ availableMoods }: { availableMoods: string[] }) {
         // BPM acquis mais suggestion Ollama ratée — garde le BPM, signale la suggestion
         setRowNotices(prev => ({ ...prev, [path]: `⚠️ Suggestion : ${String(err instanceof Error ? err.message : err)}` }));
       }
+      return true;
     } catch (err) {
       setRowNotices(prev => ({ ...prev, [path]: `⚠️ ${String(err instanceof Error ? err.message : err)}` }));
+      return false;
     } finally {
       setAnalyzing(prev => {
         const next = new Set(prev);
@@ -142,15 +145,22 @@ export function ImportPanel({ availableMoods }: { availableMoods: string[] }) {
     batchCancelRef.current = false;
     setBatchAnalyzing(true);
     setBatchProgress({ done: 0, total: pending.length, currentFile: pending[0].name });
+    setBatchSummary(null);
 
-    for (let i = 0; i < pending.length; i++) {
+    let failed = 0;
+    let i = 0;
+    for (; i < pending.length; i++) {
       if (batchCancelRef.current) break;
       setBatchProgress(prev => ({ ...prev, currentFile: pending[i].name }));
-      await analyzeAndSuggest(pending[i].path, false);
+      const ok = await analyzeAndSuggest(pending[i].path, false);
+      if (!ok) failed++;
       setBatchProgress({ done: i + 1, total: pending.length, currentFile: pending[i + 1]?.name ?? null });
     }
 
     setBatchAnalyzing(false);
+    // Signale toujours le résultat, même annulé en cours de route — sans ça un échec en
+    // rafale (ex: backend indisponible un instant) traverse toute la file en silence.
+    setBatchSummary({ done: i, failed, cancelled: batchCancelRef.current });
   };
 
   const cancelBatchAnalyze = () => {
@@ -238,6 +248,14 @@ export function ImportPanel({ availableMoods }: { availableMoods: string[] }) {
             {batchProgress.done}/{batchProgress.total}
             {batchProgress.currentFile && ` — analyse en cours : ${batchProgress.currentFile}`}
           </span>
+        </div>
+      )}
+
+      {batchSummary && (
+        <div className={`import-summary ${batchSummary.failed > 0 ? 'warn' : 'ok'}`}>
+          {batchSummary.cancelled ? '⏹️ Annulé après ' : '✓ Terminé — '}
+          {batchSummary.done} fichier(s) traité(s)
+          {batchSummary.failed > 0 && `, ${batchSummary.failed} échec(s) — voir le détail sur chaque ligne`}
         </div>
       )}
 
