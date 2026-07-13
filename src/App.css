@@ -3658,6 +3658,166 @@ kbd {
   line-height: 1.5;
 }
 
+/* ============ DEDUP NAVIDROME ============ */
+
+.dedup-modal {
+  width: 640px;
+  max-width: 94vw;
+  max-height: 86vh;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg, 12px);
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.dedup-body {
+  padding: 14px 16px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 120px;
+}
+
+.dedup-progress {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 30px 0;
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+.dedup-progress .progress-bar { width: 280px; }
+
+.dedup-progress-count {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.dedup-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dedup-group {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  overflow: hidden;
+}
+
+.dedup-group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--fg-strong);
+  background: var(--bg-panel-alt);
+  border-bottom: 1px solid var(--border);
+}
+
+.dedup-similarity {
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--success);
+  margin-left: auto;
+}
+
+.dedup-file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 11px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  flex-wrap: wrap;
+}
+
+.dedup-file-row:last-child { border-bottom: none; }
+.dedup-file-row.kept { background: rgba(46, 160, 67, 0.06); }
+
+.dedup-file-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+}
+
+.dedup-file-meta {
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.dedup-playlist-badge {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9.5px;
+  padding: 2px 6px;
+  border-radius: 8px;
+  background: rgba(224, 168, 56, 0.15);
+  border: 1px solid var(--accent-border);
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.dedup-fate {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  flex-shrink: 0;
+  width: 78px;
+}
+
+.dedup-fate.keep { color: var(--success); }
+.dedup-fate.discard { color: var(--error); }
+
+.dedup-titleonly {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.dedup-titleonly-toggle {
+  background: transparent;
+  border: none;
+  color: var(--text-faint);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.dedup-titleonly-toggle:hover { color: var(--text-muted); }
+
+.dedup-titleonly-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  max-height: 160px;
+  overflow-y: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.dedup-titleonly-list li { padding: 3px 0; }
+.dedup-titleonly-list li span { color: var(--text-faint); font-size: 10px; }
+
 /* ============ SCROLLBARS ============ */
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-track { background: transparent; }

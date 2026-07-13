@@ -70,6 +70,14 @@ export function HelpModal({ onClose }: { onClose: () => void }) {
                 (Autopilot, Revue guidée), notes, renommage, trim/fade, quarantaine réversible.
                 Pas nécessaire pour importer des nouveautés.
               </div>
+              <div className="help-workflow-step">
+                <strong>Dédup bibliothèque Navidrome</strong> (section "Bibliothèque" de la
+                colonne de gauche) : compare l'empreinte audio de tout le catalogue déjà envoyé
+                vers Navidrome, pas juste les titres (deux morceaux au même nom généré par Suno
+                ne sont pas forcément le même son) — montre les vrais doublons confirmés avec
+                leurs playlists, garde le meilleur, quarantaine le reste et le retire des
+                playlists concernées.
+              </div>
             </div>
           </div>
         )}

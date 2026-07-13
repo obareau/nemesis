@@ -233,6 +233,46 @@ export function importStreamUrl(filePath: string): string {
   return `${API}/import/stream/${toBase64Url(filePath)}`;
 }
 
+export interface DedupFile {
+  id: string;
+  title: string;
+  artist?: string;
+  relPath: string;
+  path: string;
+  size: number;
+  bitRate: number;
+  playlists: { id: string; name: string }[];
+}
+
+export interface DedupGroup {
+  title: string;
+  similarity: number;
+  files: DedupFile[];
+}
+
+export interface DedupScanState {
+  active: boolean;
+  stage: 'catalog' | 'titles' | 'fingerprint' | 'confirm' | 'playlists' | null;
+  done: number;
+  total: number;
+  confirmedGroups: DedupGroup[] | null;
+  titleOnlyGroups: { title: string; count: number }[] | null;
+  error: string | null;
+  scannedAt: string | null;
+}
+
+export function startNavidromeDedupScan() {
+  return fetch(`${API}/navidrome-dedup/scan`, { method: 'POST' });
+}
+
+export function getNavidromeDedupScan() {
+  return fetch(`${API}/navidrome-dedup/scan`);
+}
+
+export function resolveNavidromeDedup(discardPaths: string[]) {
+  return postJson('/navidrome-dedup/resolve', { discardPaths });
+}
+
 export function skipGroup(method: string, filePaths: string[]) {
   return postJson('/groups/skip', { method, filePaths });
 }

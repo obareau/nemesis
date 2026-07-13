@@ -17,6 +17,7 @@ import { formatTime, getLyricsState } from './format';
 import { moodColor } from './moods';
 import { SurpriseModal } from './components/SurpriseModal';
 import { ImportPanel } from './components/ImportPanel';
+import { NavidromeDedupModal } from './components/NavidromeDedupModal';
 import { InfoPanelModal } from './components/InfoPanelModal';
 import { WaveformEditorModal } from './components/WaveformEditorModal';
 import { CompareModal } from './components/CompareModal';
@@ -110,6 +111,7 @@ function App() {
   const [similarMin, setSimilarMin] = useState(80);
   const [similarMax, setSimilarMax] = useState(95);
   const [showSimilar, setShowSimilar] = useState(false);
+  const [showNavidromeDedup, setShowNavidromeDedup] = useState(false);
   const [sortByConfidence, setSortByConfidence] = useState(false);
   const [autopilotRunning, setAutopilotRunning] = useState(false);
   // Revue guidée : file de groupes entre REVIEW_QUEUE_MIN_CONFIDENCE et AUTOPILOT_THRESHOLD
@@ -2020,6 +2022,13 @@ function App() {
           </section>
 
           <section className="panel-section">
+            <h2>🧹 Bibliothèque</h2>
+            <button className="similar-toggle" onClick={() => setShowNavidromeDedup(true)} title="Cherche les vrais doublons audio (empreinte, pas juste le titre) dans tout le catalogue Navidrome, montre les playlists touchées">
+              Dédup bibliothèque Navidrome
+            </button>
+          </section>
+
+          <section className="panel-section">
             <h2><TagIcon /> Renommage</h2>
             <div className="rename-options">
               <label>
@@ -2910,6 +2919,7 @@ function App() {
       })()}
 
       {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
+      {showNavidromeDedup && <NavidromeDedupModal onClose={() => setShowNavidromeDedup(false)} />}
     </div>
   );
 }

@@ -13,6 +13,7 @@ import navidromeRoutes from './server/routes/navidrome.js';
 import waveformRoutes from './server/routes/waveform.js';
 import quarantineRoutes from './server/routes/quarantine.js';
 import importRoutes from './server/routes/import.js';
+import navidromeDedupRoutes from './server/routes/navidromeDedup.js';
 
 // Filet de sécurité : une exception isolée ne doit jamais tuer tout le serveur
 process.on('uncaughtException', (err) => {
@@ -40,6 +41,7 @@ app.use(navidromeRoutes);
 app.use(waveformRoutes);
 app.use(quarantineRoutes);
 app.use(importRoutes);
+app.use(navidromeDedupRoutes);
 
 // SPA fallback : toute route non-API renvoie index.html (React Router-less mais robuste au refresh)
 app.get(/^(?!\/api).*/, (req, res) => {

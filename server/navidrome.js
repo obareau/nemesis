@@ -1,5 +1,5 @@
 import path from 'path';
-import { NAVIDROME_URL, SUBSONIC_PARAMS, NAVIDROME_LIBRARY_ROOT } from './config.js';
+import { NAVIDROME_URL, SUBSONIC_PARAMS, NAVIDROME_LIBRARY_ROOT, NAVIDROME_USER, NAVIDROME_PASS } from './config.js';
 import { fuzzyMatch } from './analysis.js';
 import { readTags } from './tagging.js';
 
@@ -22,6 +22,75 @@ export async function waitForScanCompletion(maxWaitMs = 30000) {
     await new Promise(r => setTimeout(r, 1000));
   }
   return false;
+}
+
+// --- API native Navidrome (JWT) — nécessaire pour lister le catalogue complet : le champ
+// `path` de l'API Subsonic (search3/getPlaylist) est un chemin VIRTUEL reconstruit depuis
+// les tags, alors que celui de l'API native (/api/song) est le vrai chemin disque relatif
+// à la racine de la bibliothèque — indispensable pour agir sur les vrais fichiers.
+let nativeToken = null;
+let nativeTokenExp = 0;
+
+async function getNativeToken() {
+  if (nativeToken && Date.now() / 1000 < nativeTokenExp - 60) return nativeToken;
+
+  const res = await fetch(`${NAVIDROME_URL}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: NAVIDROME_USER, password: NAVIDROME_PASS })
+  });
+  if (!res.ok) throw new Error(`Authentification Navidrome (native) échouée: ${res.status}`);
+  const data = await res.json();
+  if (!data.token) throw new Error('Authentification Navidrome (native) : token manquant');
+
+  nativeToken = data.token;
+  const payload = JSON.parse(Buffer.from(data.token.split('.')[1], 'base64url').toString('utf-8'));
+  nativeTokenExp = payload.exp || Date.now() / 1000 + 3600;
+  return nativeToken;
+}
+
+async function nativeGet(endpoint) {
+  const token = await getNativeToken();
+  const res = await fetch(`${NAVIDROME_URL}${endpoint}`, {
+    headers: { 'x-nd-authorization': `Bearer ${token}` }
+  });
+  if (!res.ok) throw new Error(`Requête Navidrome (native) échouée: ${res.status}`);
+  return res.json();
+}
+
+// Liste tout le catalogue Navidrome (chemin disque réel, taille, débit) — paginé par blocs
+// de 500 pour rester raisonnable même sur une grosse bibliothèque.
+export async function listAllSongs() {
+  const pageSize = 500;
+  const all = [];
+  for (let start = 0; ; start += pageSize) {
+    const page = await nativeGet(`/api/song?_start=${start}&_end=${start + pageSize}`);
+    if (!Array.isArray(page) || page.length === 0) break;
+    for (const s of page) {
+      all.push({
+        id: s.id,
+        title: s.title,
+        artist: s.artist,
+        relPath: s.path,
+        path: s.path ? path.join(NAVIDROME_LIBRARY_ROOT, s.path) : null,
+        size: s.size,
+        bitRate: s.bitRate
+      });
+    }
+    if (page.length < pageSize) break;
+  }
+  return all;
+}
+
+// Retire un morceau d'une playlist — l'API Subsonic n'accepte que songIndexToRemove
+// (position dans la playlist), pas un id de morceau directement, donc il faut d'abord
+// retrouver son index dans getPlaylist.view.
+export async function removeSongFromPlaylist(playlistId, songId) {
+  const { playlist } = await subsonicGet('getPlaylist.view', `&id=${playlistId}`);
+  const idx = (playlist?.entry || []).findIndex(e => e.id === songId);
+  if (idx < 0) return false;
+  await subsonicGet('updatePlaylist.view', `&playlistId=${playlistId}&songIndexToRemove=${idx}`);
+  return true;
 }
 
 // Cherche le morceau tout juste scanné dans Navidrome. Le `path` renvoyé par l'API
