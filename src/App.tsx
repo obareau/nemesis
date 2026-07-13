@@ -54,6 +54,28 @@ function groupConfidence(dup: Duplicate): number {
 // volontairement élevé (quasi-certitude) puisqu'aucun jugement humain n'est demandé.
 const AUTOPILOT_THRESHOLD = 95;
 
+// Borne basse de la revue guidée (groupes ni assez sûrs pour l'autopilot, ni assez
+// douteux pour être ignorés) — le haut de la fourchette est AUTOPILOT_THRESHOLD.
+const REVIEW_QUEUE_MIN_CONFIDENCE = 60;
+
+// Sélectionne le fichier à garder dans un groupe de doublons : débit binaire d'abord
+// (proxy qualité fiable) si les deux fichiers l'ont, sinon taille puis date de création
+// la plus ancienne (probablement l'original). Centralisé ici pour que l'autopilot ait
+// une seule logique de départage, testable/ajustable à un seul endroit.
+function pickBestFile(files: File[]): File {
+  const sorted = [...files].sort((a, b) => {
+    if (a.bitrate != null && b.bitrate != null && a.bitrate !== b.bitrate) return b.bitrate - a.bitrate;
+    return b.size - a.size || a.mtime - b.mtime;
+  });
+  return sorted[0];
+}
+
+const STAGE_LABELS: Record<string, string> = {
+  bitrate: '📶 Débit',
+  fingerprint: '🌊 Audio (fingerprint)',
+  lyrics: '🎤 Paroles'
+};
+
 function App() {
   const [state, setState] = useState<AnalysisState>({
     status: 'idle',
@@ -88,6 +110,12 @@ function App() {
   const [showSimilar, setShowSimilar] = useState(false);
   const [sortByConfidence, setSortByConfidence] = useState(false);
   const [autopilotRunning, setAutopilotRunning] = useState(false);
+  // Revue guidée : file de groupes entre REVIEW_QUEUE_MIN_CONFIDENCE et AUTOPILOT_THRESHOLD
+  // de confiance, step-through via le GroupPanel existant (Appliquer/Ignorer avance
+  // automatiquement au suivant plutôt que de fermer le panneau).
+  const [reviewQueue, setReviewQueue] = useState<Duplicate[]>([]);
+  const [reviewIndex, setReviewIndex] = useState(0);
+  const [reviewActive, setReviewActive] = useState(false);
   const [openMood, setOpenMood] = useState<string | null>(null);
   const [moodPanelTracks, setMoodPanelTracks] = useState<MoodTrack[]>([]);
   const [moodPanelLoading, setMoodPanelLoading] = useState(false);
@@ -120,6 +148,8 @@ function App() {
   const [painterMoods, setPainterMoods] = useState<Set<string>>(new Set());
   const [painterRating, setPainterRating] = useState<number | null>(null);
   const [painterRenameEnabled, setPainterRenameEnabled] = useState(false);
+  const [generatingPainterMood, setGeneratingPainterMood] = useState(false);
+  const [painterMoodNotice, setPainterMoodNotice] = useState<string | null>(null);
   const [playerWaveform, setPlayerWaveform] = useState<string | null>(null);
   const [compareFiles, setCompareFiles] = useState<[File, File] | null>(null);
   const [comparePlaying, setComparePlaying] = useState(false);
@@ -978,6 +1008,32 @@ function App() {
     }
   };
 
+  // Peintre n'est pas scopé à un groupe — utilise le morceau en cours de lecture comme
+  // signal paroles/BPM (pas de sélecteur de fichier de référence dédié).
+  const generatePainterMood = async () => {
+    const file = state.files.find(f => f.path === playingFilePath);
+    if (!file) {
+      setPainterMoodNotice('⚠️ Lance la lecture d\'un morceau pour suggérer un mood à partir de lui');
+      return;
+    }
+    if (!file.lyrics?.trim() && !file.bpm) {
+      setPainterMoodNotice('⚠️ Aucune parole ni BPM/tonalité analysé pour ce morceau');
+      return;
+    }
+    setGeneratingPainterMood(true);
+    setPainterMoodNotice(null);
+    try {
+      const res = await api.generateMood(file.lyrics || '', file.bpm, file.key, file.scale);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Échec génération');
+      setPainterMoods(new Set(data.moods));
+    } catch (err) {
+      setPainterMoodNotice(`⚠️ ${String(err instanceof Error ? err.message : err)}`);
+    } finally {
+      setGeneratingPainterMood(false);
+    }
+  };
+
   // Applique le traitement du groupe : quarantaine des écartés → renommage des gardés → push Navidrome
   const applyGroup = async () => {
     if (!workingGroup) return;
@@ -1031,10 +1087,10 @@ function App() {
         report.push(`Navidrome: ${data.pushed - covered} vers moods${covered ? `, ${covered} → Covers` : ''}`);
       }
 
-      // Marque le groupe traité (persisté côté serveur) et ferme
+      // Marque le groupe traité (persisté côté serveur) et ferme (ou avance à la revue suivante)
       await api.skipGroup(workingGroup.method, workingGroup.files.map(f => f.path));
       setProcessedGroups(prev => new Set(prev).add(groupSignature(workingGroup)));
-      setWorkingGroup(null);
+      if (reviewActive) advanceReviewQueue(); else setWorkingGroup(null);
       setRenameNotice(`✓ Groupe traité — ${report.join(' · ') || 'aucune action'}`);
 
       const statusRes = await api.getStatus();
@@ -1057,13 +1113,13 @@ function App() {
       // le groupe restera visible si l'appel échoue — pas bloquant
     }
     setProcessedGroups(prev => new Set(prev).add(groupSignature(workingGroup)));
-    setWorkingGroup(null);
+    if (reviewActive) advanceReviewQueue(); else setWorkingGroup(null);
   };
 
   // Autopilot : traite en rafale les groupes à confiance >= AUTOPILOT_THRESHOLD sans
-  // passage manuel — garde le fichier le plus gros (heuristique qualité, départage par
-  // date de création la plus ancienne = probablement l'original), quarantaine le reste
-  // (réversible via undo/restauration comme n'importe quelle quarantaine).
+  // passage manuel — garde le fichier de meilleure qualité (pickBestFile : débit binaire
+  // d'abord, taille/date ensuite), quarantaine le reste (réversible via undo/restauration
+  // comme n'importe quelle quarantaine).
   const runAutopilot = async () => {
     const candidates = state.duplicates.filter(dup =>
       !processedGroups.has(groupSignature(dup)) && groupConfidence(dup) >= AUTOPILOT_THRESHOLD
@@ -1075,7 +1131,7 @@ function App() {
     }
     if (!window.confirm(
       `Traiter automatiquement ${candidates.length} groupe(s) à ${AUTOPILOT_THRESHOLD}%+ de confiance ?\n` +
-      `Le fichier le plus gros de chaque groupe est gardé, les autres partent en quarantaine (réversible).`
+      `Le fichier de meilleure qualité de chaque groupe est gardé, les autres partent en quarantaine (réversible).`
     )) {
       return;
     }
@@ -1084,8 +1140,8 @@ function App() {
     try {
       const discardPaths: string[] = [];
       for (const dup of candidates) {
-        const sorted = [...dup.files].sort((a, b) => b.size - a.size || a.mtime - b.mtime);
-        discardPaths.push(...sorted.slice(1).map(f => f.path));
+        const best = pickBestFile(dup.files);
+        discardPaths.push(...dup.files.filter(f => f.path !== best.path).map(f => f.path));
       }
 
       if (discardPaths.length > 0) {
@@ -1113,6 +1169,52 @@ function App() {
       showTopNotice(`⚠️ ${String(err instanceof Error ? err.message : err)}`);
     } finally {
       setAutopilotRunning(false);
+    }
+  };
+
+  // Revue guidée : trie toujours par confiance décroissante (indépendant du toggle
+  // "Confiance" de la liste) — une file de triage part du plus évident au plus incertain.
+  const startReviewQueue = () => {
+    const queue = state.duplicates
+      .filter(d => d.method === analysisMode && !processedGroups.has(groupSignature(d)))
+      .filter(d => {
+        const c = groupConfidence(d);
+        return c >= REVIEW_QUEUE_MIN_CONFIDENCE && c < AUTOPILOT_THRESHOLD;
+      })
+      .sort((a, b) => groupConfidence(b) - groupConfidence(a));
+
+    if (queue.length === 0) {
+      showTopNotice(`Aucun groupe entre ${REVIEW_QUEUE_MIN_CONFIDENCE}% et ${AUTOPILOT_THRESHOLD}% de confiance pour l'instant`);
+      return;
+    }
+    setReviewQueue(queue);
+    setReviewIndex(0);
+    setReviewActive(true);
+    openGroupPanel(queue[0]);
+  };
+
+  const advanceReviewQueue = () => {
+    const nextIndex = reviewIndex + 1;
+    if (nextIndex >= reviewQueue.length) {
+      setReviewActive(false);
+      setReviewQueue([]);
+      setReviewIndex(0);
+      setWorkingGroup(null);
+      showTopNotice('✓ Revue terminée');
+      return;
+    }
+    setReviewIndex(nextIndex);
+    openGroupPanel(reviewQueue[nextIndex]);
+  };
+
+  // Fermeture manuelle (X / Annuler) : abandonne la revue plutôt que d'avancer —
+  // contrairement à Appliquer/Ignorer qui, eux, signalent une décision prise.
+  const closeGroupPanel = () => {
+    setWorkingGroup(null);
+    if (reviewActive) {
+      setReviewActive(false);
+      setReviewQueue([]);
+      setReviewIndex(0);
     }
   };
 
@@ -1608,7 +1710,7 @@ function App() {
   // tourne encore ne veut pas dire "aucun doublon", juste "pas encore calculé".
   const modeStageReady = (mode: AnalysisMethod): boolean => {
     if (mode === 'size' || mode === 'name') return true;
-    if (mode === 'fingerprint') return state.status === 'completed' || state.totalProgress >= 75;
+    if (mode === 'fingerprint') return state.status === 'completed' || state.totalProgress >= 80;
     if (mode === 'lyrics') return state.status === 'completed';
     return true;
   };
@@ -1684,7 +1786,7 @@ function App() {
                 <>
                   <div className="progress-row secondary">
                     <span className="progress-label">
-                      {state.currentStage === 'lyrics' ? '🎤 Paroles' : '🌊 Audio (fingerprint)'} · fichier {state.currentFile}
+                      {STAGE_LABELS[state.currentStage ?? ''] ?? state.currentStage} · fichier {state.currentFile}
                     </span>
                     <span className="progress-value">{state.fileProgress}%</span>
                   </div>
@@ -1741,7 +1843,13 @@ function App() {
             )}
             {showHistory && (
               <div className="undo-history-panel">
-                <div className="undo-history-title">Historique — clique pour annuler jusqu'à ce point</div>
+                <div className="undo-history-title">
+                  Historique — clique pour annuler jusqu'à ce point
+                  <span className="undo-history-export">
+                    <a href={api.exportActionLogUrl('json')} download title="Exporter en JSON">JSON</a>
+                    <a href={api.exportActionLogUrl('csv')} download title="Exporter en CSV">CSV</a>
+                  </span>
+                </div>
                 {[...(state.actionLog || [])].reverse().map((a, i) => (
                   <button
                     key={a.id}
@@ -2037,6 +2145,14 @@ function App() {
                   </button>
                 ))}
               </div>
+              <button
+                className="generate-btn generate-mood-btn"
+                onClick={generatePainterMood}
+                disabled={generatingPainterMood || !playingFilePath}
+                title="Suggérer le(s) mood(s) via Ollama, à partir des paroles/BPM du morceau en cours de lecture"
+              >
+                {generatingPainterMood ? '…' : <SparkleIcon />} Suggérer (morceau en écoute)
+              </button>
               <span className="painter-label">Note</span>
               <div className="painter-rating">
                 <button
@@ -2065,8 +2181,10 @@ function App() {
                 />
                 <EditIcon size={11} /> Nom + auteur ({authorName.trim() || '—'}{titleName.trim() ? ` / ${titleName.trim()}` : ''})
               </label>
-              <span className="painter-hint">
-                {painterMoods.size === 0 && painterRating === null && !painterRenameEnabled
+              <span className={`painter-hint ${painterMoodNotice ? 'error' : ''}`}>
+                {painterMoodNotice
+                  ? painterMoodNotice
+                  : painterMoods.size === 0 && painterRating === null && !painterRenameEnabled
                   ? 'Choisis un mood, une note et/ou active nom+auteur, puis clique-glisse sur les fichiers'
                   : painterRenameEnabled && !authorName.trim()
                   ? '⚠️ Renseigne un auteur dans le panneau Renommage à gauche'
@@ -2269,9 +2387,19 @@ function App() {
                     className="autopilot-btn"
                     onClick={runAutopilot}
                     disabled={autopilotRunning}
-                    title={`Traite automatiquement les groupes à ${AUTOPILOT_THRESHOLD}%+ de confiance : garde le plus gros fichier, quarantaine le reste (réversible)`}
+                    title={`Traite automatiquement les groupes à ${AUTOPILOT_THRESHOLD}%+ de confiance : garde le fichier de meilleure qualité, quarantaine le reste (réversible)`}
                   >
                     {autopilotRunning ? '…autopilot' : '🚀 Autopilot'}
+                  </button>
+                )}
+                {!showSimilar && filteredDuplicates.length > 0 && (
+                  <button
+                    className="review-queue-btn"
+                    onClick={startReviewQueue}
+                    disabled={autopilotRunning}
+                    title={`Revue guidée des groupes entre ${REVIEW_QUEUE_MIN_CONFIDENCE}% et ${AUTOPILOT_THRESHOLD}% de confiance`}
+                  >
+                    🔍 Revue
                   </button>
                 )}
                 <span className="panel-count">
@@ -2586,7 +2714,8 @@ function App() {
           generatingMood={generatingMood}
           analyzingPaths={analyzingPaths}
           playingFilePath={playingFilePath}
-          onClose={() => setWorkingGroup(null)}
+          reviewProgress={reviewActive ? { index: reviewIndex, total: reviewQueue.length } : null}
+          onClose={closeGroupPanel}
           onToggleKeep={toggleKeep}
           onPlay={playFileByPath}
           onRate={rateFile}

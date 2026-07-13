@@ -23,6 +23,7 @@ interface GroupPanelProps {
   generatingMood: boolean;
   analyzingPaths: Set<string>;
   playingFilePath: string | null;
+  reviewProgress?: { index: number; total: number } | null;
   onClose: () => void;
   onToggleKeep: (filePath: string) => void;
   onPlay: (filePath: string) => void;
@@ -47,7 +48,7 @@ interface GroupPanelProps {
 export function GroupPanel({
   group, keepPaths, availableMoods, groupQuarantine, groupRename, groupNavidrome,
   groupAuthor, groupTitle, groupMoods, groupNotice, groupProcessing,
-  generatingAuthor, generatingTitle, generatingMood, analyzingPaths, playingFilePath,
+  generatingAuthor, generatingTitle, generatingMood, analyzingPaths, playingFilePath, reviewProgress,
   onClose, onToggleKeep, onPlay, onRate, onOpenWaveformEditor, onQuickQuarantine,
   onOpenInfo, onAnalyzeAudio, onSetGroupQuarantine, onSetGroupRename, onSetGroupNavidrome,
   onSetGroupAuthor, onSetGroupTitle, onGenerateAuthor, onGenerateTitle, onGenerateMood, onToggleGroupMood,
@@ -61,6 +62,9 @@ export function GroupPanel({
           <span className={`group-method-badge method-${group.method}`}>
             {group.method}{group.similarity ? ` · ${group.similarity}%` : ''}
           </span>
+          {reviewProgress && (
+            <span className="review-queue-badge">Revue {reviewProgress.index + 1}/{reviewProgress.total}</span>
+          )}
         </h2>
 
         <div className="group-files">

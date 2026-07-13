@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import {
   levenshtein, normalizeTrackName, fuzzyMatch, analyzeBySize, analyzeByName,
-  lyricsSimilarity, analyzeByLyrics, fingerprintSimilarity, analyzeByFingerprint
+  lyricsSimilarity, analyzeByLyrics, fingerprintSimilarity, analyzeByFingerprint,
+  scanDirectory, SUPPORTED_EXTENSIONS
 } from './analysis.js';
 
 describe('levenshtein', () => {
@@ -155,5 +159,24 @@ describe('analyzeByFingerprint', () => {
     const { groups } = analyzeByFingerprint(files);
     expect(groups).toHaveLength(1);
     expect(groups[0].files.map(f => f.path).sort()).toEqual(['a', 'b']);
+  });
+});
+
+describe('scanDirectory', () => {
+  it('retient MP3/FLAC/WAV/OGG et ignore les autres extensions', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nemesis-scan-'));
+    try {
+      const names = ['a.mp3', 'b.flac', 'c.wav', 'd.ogg', 'e.m4a', 'f.txt'];
+      for (const name of names) fs.writeFileSync(path.join(dir, name), 'x');
+
+      const found = scanDirectory(dir).map(f => f.name).sort();
+      expect(found).toEqual(['a.mp3', 'b.flac', 'c.wav', 'd.ogg']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('SUPPORTED_EXTENSIONS couvre exactement les 4 formats attendus', () => {
+    expect([...SUPPORTED_EXTENSIONS].sort()).toEqual(['.flac', '.mp3', '.ogg', '.wav']);
   });
 });

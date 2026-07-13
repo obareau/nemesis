@@ -6,12 +6,48 @@ import {
 } from '../store.js';
 import {
   scanDirectory, analyzeBySize, analyzeByName, analyzeByFingerprint, analyzeByLyrics,
-  getFingerprint, transcribeLyrics, runWithConcurrency
+  getFingerprint, transcribeLyrics, runWithConcurrency, probeBitrate
 } from '../analysis.js';
 import { getCachedAnalysis, setCachedAnalysis } from '../cache.js';
 import { warmWaveformCache } from '../waveformCache.js';
 
 const router = express.Router();
+
+// Étape débit — extraite pour être appelée aussi bien pendant un scan que pour
+// combler après-coup un projet déjà persisté avant l'existence de ce champ
+// (voir maybeBackfillBitrate). Contrairement au fingerprint/paroles, tourne sur
+// TOUS les fichiers (pas seulement les candidats doublons) puisque l'autopilot
+// compare potentiellement n'importe quel fichier du projet.
+export async function runBitrateStage(myGeneration) {
+  analysisState.currentStage = 'bitrate';
+  const files = analysisState.files;
+  let done = 0;
+  await runWithConcurrency(files, FPCALC_CONCURRENCY, async (file) => {
+    if (scanGeneration !== myGeneration) return;
+    try {
+      file.bitrate = await probeBitrate(file.path);
+    } catch (e) {
+      console.error('Bitrate probe error:', e.message);
+    }
+    done++;
+    analysisState.currentFile = `${done}/${files.length}`;
+    analysisState.fileProgress = files.length ? Math.round((done / files.length) * 100) : 100;
+  });
+}
+
+// Comble le débit manquant sur un projet repris (déjà scanné avant l'ajout de ce champ,
+// ou interrompu en cours de route) — en tâche de fond, non bloquant, idempotent.
+export function maybeBackfillBitrate() {
+  if (!analysisState.files.some(f => f.bitrate == null)) return;
+  const myGeneration = bumpScanGeneration();
+  setTimeout(async () => {
+    if (scanGeneration !== myGeneration) return;
+    await runBitrateStage(myGeneration);
+    if (scanGeneration !== myGeneration) return;
+    analysisState.currentStage = null;
+    persistProject();
+  }, 50);
+}
 
 // API: Scan directory
 router.post('/api/scan', express.json(), async (req, res) => {
@@ -36,6 +72,7 @@ router.post('/api/scan', express.json(), async (req, res) => {
       setAnalysisState(existing.analysisState);
       setProcessedGroups(existing.processedGroups || []);
       setActionLog(existing.actionLog || []);
+      maybeBackfillBitrate();
       return res.json({ ...analysisState, resumed: true });
     }
   }
@@ -64,18 +101,25 @@ router.post('/api/scan', express.json(), async (req, res) => {
 
     // Étape 1: Size (groupes de fichiers de taille strictement identique)
     const sizeGroups = analyzeBySize(files);
-    analysisState.totalProgress = 25;
+    analysisState.totalProgress = 20;
 
     // Étape 2: Name (comparaison sur TOUS les fichiers, indépendamment de la taille)
     const { groups: nameGroups, allPairs: namePairs } = analyzeByName(files);
     analysisState.duplicates = [...sizeGroups, ...nameGroups];
     analysisState.similarPairs = [...namePairs];
-    analysisState.totalProgress = 50;
+    analysisState.totalProgress = 40;
     persistProject();
 
-    // Étape 3 + 4: Fingerprint puis Paroles (async, background) — ne bloque jamais le serveur
+    // Étape 3 + 4 + 5: Débit, Fingerprint puis Paroles (async, background) — ne bloque jamais le serveur
     setTimeout(async () => {
       try {
+        // Débit binaire — sur TOUS les fichiers (pas seulement les candidats doublons),
+        // c'est une lecture de métadonnées bon marché, contrairement au fingerprint/whisper.
+        await runBitrateStage(myGeneration);
+        if (scanGeneration !== myGeneration) return;
+        analysisState.totalProgress = 60;
+        persistProject();
+
         // Fingerprinte tous les fichiers candidats (uniques, dédupliqués par chemin)
         const candidatesByPath = new Map();
         for (const dup of analysisState.duplicates) {
@@ -114,7 +158,7 @@ router.post('/api/scan', express.json(), async (req, res) => {
         const { groups: fingerprintGroups, allPairs: fingerprintPairs } = analyzeByFingerprint(candidates);
         analysisState.duplicates = [...analysisState.duplicates, ...fingerprintGroups];
         analysisState.similarPairs = [...analysisState.similarPairs, ...fingerprintPairs];
-        analysisState.totalProgress = 75;
+        analysisState.totalProgress = 80;
         persistProject();
 
         // Étape 4 : Paroles — transcrit uniquement les candidats déjà remontés par taille/nom/audio

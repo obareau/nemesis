@@ -8,6 +8,7 @@ export interface File {
   name: string;
   size: number;
   mtime: number;
+  bitrate?: number; // bits/sec (ffprobe format=bit_rate), pas encore extrait tant que l'étape "bitrate" du scan n'est pas passée
   fingerprint?: string;
   lyrics?: string;
   rating?: number;
@@ -154,6 +155,12 @@ export function closeProject() {
 
 export function undo() {
   return fetch(`${API}/undo`, { method: 'POST' });
+}
+
+// Retourne l'URL directe (pas un fetch) — le navigateur gère le téléchargement
+// nativement via le Content-Disposition renvoyé par le serveur.
+export function exportActionLogUrl(format: 'json' | 'csv'): string {
+  return `${API}/export/action-log?format=${format}`;
 }
 
 export function getWaveform(filePath: string) {

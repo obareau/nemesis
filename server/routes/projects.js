@@ -1,7 +1,6 @@
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
-import NodeID3 from 'node-id3';
 import { PROJECTS_DIR, QUARANTINE_DIR } from '../config.js';
 import {
   analysisState, processedGroups, actionLog,
@@ -11,6 +10,8 @@ import {
 import { safeMoveSync } from '../fsUtils.js';
 import { readQuarantineManifest, writeQuarantineManifest } from '../quarantineFs.js';
 import { subsonicGet } from '../navidrome.js';
+import { writeTags } from '../tagging.js';
+import { maybeBackfillBitrate } from './scan.js';
 
 const router = express.Router();
 
@@ -56,6 +57,7 @@ router.post('/api/projects/reopen', express.json(), (req, res) => {
   setAnalysisState(existing.analysisState);
   setProcessedGroups(existing.processedGroups || []);
   setActionLog(existing.actionLog || []);
+  maybeBackfillBitrate();
   res.json({ ...analysisState, resumed: true });
 });
 
@@ -134,7 +136,7 @@ router.post('/api/undo', async (req, res) => {
     } else if (last.type === 'rename') {
       for (const r of last.data.renames) {
         safeMoveSync(r.newPath, r.oldPath);
-        if (r.oldTags) NodeID3.update(r.oldTags, r.oldPath);
+        if (r.oldTags) await writeTags(r.oldPath, r.oldTags);
         const fileEntry = analysisState.files.find(f => f.path === r.newPath);
         if (fileEntry) {
           fileEntry.path = r.oldPath;
@@ -172,6 +174,32 @@ router.post('/api/undo', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: `Échec undo: ${err.message}` });
   }
+});
+
+// API: Export de l'historique d'actions du projet actif (audit trail) — JSON complet
+// (avec `data`, utile pour rejouer/inspecter un undo) ou CSV (résumé + detail en JSON compact,
+// les types d'action ont des formes trop différentes pour des colonnes dédiées propres).
+router.get('/api/export/action-log', (req, res) => {
+  if (!analysisState.dirPath) {
+    return res.status(400).json({ error: 'Aucun projet actif' });
+  }
+
+  if (req.query.format === 'csv') {
+    const header = ['id', 'type', 'timestamp', 'description', 'detail'];
+    const escapeCsv = (v) => {
+      const s = String(v ?? '');
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const rows = actionLog.map(a => [a.id, a.type, a.timestamp, a.description, JSON.stringify(a.data || {})]);
+    const csv = [header, ...rows].map(r => r.map(escapeCsv).join(',')).join('\n');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="nemesis-action-log-${Date.now()}.csv"`);
+    return res.send('\uFEFF' + csv); // BOM — accents FR lisibles dans Excel
+  }
+
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Content-Disposition', `attachment; filename="nemesis-action-log-${Date.now()}.json"`);
+  res.send(JSON.stringify(actionLog, null, 2));
 });
 
 export default router;

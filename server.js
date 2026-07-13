@@ -6,7 +6,7 @@ import { __dirname } from './server/config.js';
 import { analysisState, scanGeneration, setAnalysisState, setProcessedGroups, setActionLog, listProjects, loadProjectRaw } from './server/store.js';
 import { warmWaveformCache } from './server/waveformCache.js';
 import browseRoutes from './server/routes/browse.js';
-import scanRoutes from './server/routes/scan.js';
+import scanRoutes, { maybeBackfillBitrate } from './server/routes/scan.js';
 import projectsRoutes from './server/routes/projects.js';
 import filesRoutes from './server/routes/files.js';
 import navidromeRoutes from './server/routes/navidrome.js';
@@ -65,6 +65,7 @@ function loadMostRecentActiveProject() {
   console.log(`⚖️  Projet repris automatiquement: ${project.dirPath}`);
   if (analysisState.files?.length > 0) {
     warmWaveformCache(analysisState.files, scanGeneration).catch(() => {});
+    maybeBackfillBitrate();
   }
 }
 

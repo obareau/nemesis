@@ -1,14 +1,14 @@
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
-import NodeID3 from 'node-id3';
 import { OLLAMA_URL, OLLAMA_MODEL, EDITS_BACKUP_DIR, SHOW_MOODS } from '../config.js';
 import {
   analysisState, actionLog, persistProject, applyAudioFeatures, applyLyrics
 } from '../store.js';
 import { getCachedAnalysis, setCachedAnalysis } from '../cache.js';
-import { analyzeAudioFeatures, transcribeLyrics, probeDuration, runFfmpeg } from '../analysis.js';
+import { analyzeAudioFeatures, transcribeLyrics, probeDuration, probeBitrate, runFfmpeg } from '../analysis.js';
 import { safeMoveSync } from '../fsUtils.js';
+import { readTags, writeTags, audioCodecArgsFor } from '../tagging.js';
 
 const router = express.Router();
 
@@ -131,9 +131,9 @@ router.post('/api/analyze-audio', express.json(), async (req, res) => {
   setCachedAnalysis(fileEntry, result);
   applyAudioFeatures(filePath, result);
   try {
-    NodeID3.update({ bpm: String(Math.round(result.bpm)), initialKey: `${result.key}${result.scale === 'minor' ? 'm' : ''}` }, filePath);
+    await writeTags(filePath, { bpm: String(Math.round(result.bpm)), initialKey: `${result.key}${result.scale === 'minor' ? 'm' : ''}` });
   } catch {
-    // tag ID3 échoué (fichier verrouillé/lecture seule) — pas bloquant, la valeur reste en cache app
+    // tag échoué (fichier verrouillé/lecture seule) — pas bloquant, la valeur reste en cache app
   }
   persistProject();
   res.json({ success: true, ...result, cached: false });
@@ -163,8 +163,8 @@ router.post('/api/lyrics-rescan', express.json(), async (req, res) => {
   }
 });
 
-// API: Renommage en masse + tagging ID3 (artiste fictif + titre paroles + genre(s) depuis mood(s))
-router.post('/api/rename-bulk', express.json(), (req, res) => {
+// API: Renommage en masse + tagging (artiste fictif + titre paroles)
+router.post('/api/rename-bulk', express.json(), async (req, res) => {
   const { filePaths, author, title, moods } = req.body;
 
   if (!Array.isArray(filePaths) || filePaths.length === 0) {
@@ -179,18 +179,14 @@ router.post('/api/rename-bulk', express.json(), (req, res) => {
 
   for (const filePath of filePaths) {
     try {
-      // Snapshot des tags ID3 d'origine pour pouvoir les restaurer via undo
-      let oldTags = {};
-      try {
-        const read = NodeID3.read(filePath);
-        oldTags = { artist: read.artist || '', title: read.title || '', genre: read.genre || '' };
-      } catch { /* pas de tags existants, undo restaurera vide */ }
+      // Snapshot des tags d'origine pour pouvoir les restaurer via undo
+      const oldTags = await readTags(filePath);
 
-      // Tag ID3 : artiste fictif + titre (paroles). Le mood n'est PAS un genre ID3 —
+      // Tag : artiste fictif + titre (paroles). Le mood n'est PAS un genre ID3 —
       // Subwave route par appartenance à une playlist Navidrome (voir /api/navidrome/push).
       const tags = { artist: author };
       if (title && title.trim()) tags.title = title.trim();
-      NodeID3.update(tags, filePath);
+      await writeTags(filePath, tags);
 
       // Renommage physique : "{author} - [{titre}]" remplace le nom d'origine
       // (pas de concaténation) — suffixe numérique si collision avec un fichier existant.
@@ -486,7 +482,7 @@ router.post('/api/audio-edit', express.json(), async (req, res) => {
     const tempPath = path.join(path.dirname(filePath), `.nemesis-edit-${Date.now()}${path.extname(filePath)}`);
     const args = ['-y', '-i', filePath, '-ss', String(trimStart), '-t', String(newDuration)];
     if (filters.length > 0) args.push('-af', filters.join(','));
-    args.push('-codec:a', 'libmp3lame', '-q:a', '2', tempPath);
+    args.push(...audioCodecArgsFor(filePath), tempPath);
 
     await runFfmpeg(args);
     safeMoveSync(tempPath, filePath);
@@ -495,12 +491,15 @@ router.post('/api/audio-edit', express.json(), async (req, res) => {
     fileEntry.size = stat.size;
     fileEntry.mtime = stat.mtimeMs;
     // Contenu audio modifié : les analyses précédentes (empreinte, paroles, bpm, tonalité)
-    // ne correspondent plus au fichier — elles seront recalculées à la demande.
+    // ne correspondent plus au fichier — elles seront recalculées à la demande. Le débit
+    // change aussi (durée/filtres différents) mais est bon marché à ré-extraire tout de
+    // suite plutôt que de laisser l'heuristique autopilot tourner sur une valeur périmée.
     delete fileEntry.fingerprint;
     delete fileEntry.lyrics;
     delete fileEntry.bpm;
     delete fileEntry.key;
     delete fileEntry.scale;
+    try { fileEntry.bitrate = await probeBitrate(filePath); } catch { delete fileEntry.bitrate; }
 
     actionLog.push({
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,

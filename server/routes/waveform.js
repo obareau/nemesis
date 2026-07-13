@@ -8,6 +8,8 @@ import { waveformCachePathFor } from '../waveformCache.js';
 
 const router = express.Router();
 
+const MIME_BY_EXT = { '.mp3': 'audio/mpeg', '.flac': 'audio/flac', '.wav': 'audio/wav', '.ogg': 'audio/ogg' };
+
 // API: Sonogrammes de deux fichiers rendus à la MÊME échelle px/seconde (calée sur t=0),
 // pour une comparaison A/B visuelle — pas de corrélation croisée, mais un calage commun au
 // début suffit à révéler d'un coup d'œil une intro coupée, un outro en plus, ou une durée
@@ -121,7 +123,7 @@ router.get('/api/stream/:encodedPath', (req, res) => {
   const fileSize = stat.size;
   const range = req.headers.range;
 
-  res.setHeader('Content-Type', 'audio/mpeg');
+  res.setHeader('Content-Type', MIME_BY_EXT[path.extname(file.path).toLowerCase()] || 'audio/mpeg');
   res.setHeader('Accept-Ranges', 'bytes');
 
   let stream;

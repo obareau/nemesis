@@ -25,6 +25,30 @@ export function probeDuration(filePath) {
   });
 }
 
+// Débit binaire (bits/sec) — lecture de métadonnées seule, pas de décodage, donc
+// beaucoup plus rapide que fpcalc/Essentia. Sert de départage qualité pour l'autopilot
+// (une taille de fichier plus grosse ne veut pas dire un meilleur encodage : un
+// silence de padding ou une intro plus longue en VBR gonfle la taille sans qualité).
+export function probeBitrate(filePath) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(FFPROBE_BIN, [
+      '-v', 'error', '-show_entries', 'format=bit_rate',
+      '-of', 'default=noprint_wrappers=1:nokey=1', filePath
+    ]);
+    let output = '';
+    proc.on('error', (err) => reject(err));
+    proc.stdout.on('data', (d) => { output += d.toString(); });
+    proc.on('close', (code) => {
+      const bitrate = parseInt(output.trim(), 10);
+      if (code !== 0 || !Number.isFinite(bitrate)) {
+        reject(new Error('Impossible de lire le débit du fichier'));
+      } else {
+        resolve(bitrate);
+      }
+    });
+  });
+}
+
 export function runFfmpeg(args) {
   return new Promise((resolve, reject) => {
     const proc = spawn(FFMPEG_BIN, args);
@@ -51,7 +75,11 @@ export async function runWithConcurrency(items, limit, worker) {
   await Promise.all(Array.from({ length: workerCount }, runNext));
 }
 
-// Scan directory récursivement pour MP3s
+// Formats audio pris en charge par le scan — chromaprint/ffmpeg/Essentia les décodent
+// tous nativement, seul le tagging (server/tagging.js) a besoin de brancher par format.
+export const SUPPORTED_EXTENSIONS = new Set(['.mp3', '.flac', '.wav', '.ogg']);
+
+// Scan directory récursivement pour les formats audio supportés
 export function scanDirectory(dirPath) {
   const files = [];
 
@@ -64,7 +92,7 @@ export function scanDirectory(dirPath) {
 
         if (entry.isDirectory()) {
           walk(fullPath);
-        } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.mp3')) {
+        } else if (entry.isFile() && SUPPORTED_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
           const stat = fs.statSync(fullPath);
           files.push({
             path: fullPath,

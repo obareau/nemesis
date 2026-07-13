@@ -126,3 +126,7 @@ export function applyNavidromePushed(filePath, pushedToNavidrome) {
 export function applyLyrics(filePath, lyrics) {
   applyToFile(filePath, (f) => { f.lyrics = lyrics; });
 }
+
+export function applyBitrate(filePath, bitrate) {
+  applyToFile(filePath, (f) => { f.bitrate = bitrate; });
+}
