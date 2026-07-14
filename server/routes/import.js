@@ -7,6 +7,7 @@ import { getCachedAnalysis, setCachedAnalysis } from '../cache.js';
 import { writeTags } from '../tagging.js';
 import { safeMoveSync, streamAudioWithRange } from '../fsUtils.js';
 import { pushFilesToNavidrome } from '../navidromePush.js';
+import { readImportHistory, writeImportHistory } from '../importHistory.js';
 
 const router = express.Router();
 
@@ -23,6 +24,23 @@ export function datedFolderName(d = new Date()) {
   return `${String(d.getDate()).padStart(2, '0')}-${FR_MONTHS[d.getMonth()]}-${d.getFullYear()}`;
 }
 
+// Détecte si un dossier de l'inbox a déjà été envoyé : "possible" si un import antérieur du
+// même nom a le même nombre de fichiers (test rapide), "confirmed" si en plus les noms de
+// fichiers correspondent exactement (analyse plus poussée sur l'historique persistant).
+export function detectFolderWarning(folderName, currentFileNames, history) {
+  const candidates = history.filter(h => h.folderName === folderName && h.fileCount === currentFileNames.length);
+  if (candidates.length === 0) return null;
+
+  const sortedCurrent = JSON.stringify([...currentFileNames].sort());
+  const confirmed = candidates.find(c => JSON.stringify([...c.fileNames].sort()) === sortedCurrent);
+  if (confirmed) {
+    return { status: 'confirmed', importedAt: confirmed.importedAt, destDir: confirmed.destDir };
+  }
+
+  const latest = [...candidates].sort((a, b) => b.importedAt.localeCompare(a.importedAt))[0];
+  return { status: 'possible', importedAt: latest.importedAt, destDir: latest.destDir };
+}
+
 // API: Liste de la boîte de dépôt — fichiers audio en attente d'import, hors dossiers
 // d'archive (INBOX_EXCLUDE_DIRS, noms de 1er niveau). Les plus récents d'abord.
 router.get('/api/import/inbox', (req, res) => {
@@ -37,7 +55,25 @@ router.get('/api/import/inbox', (req, res) => {
     })
     .sort((a, b) => b.mtime - a.mtime);
 
-  res.json({ inboxDir: INBOX_DIR, files });
+  // Groupe par dossier de PREMIER NIVEAU (pas le relPath complet, qui peut être imbriqué) —
+  // "le dossier X a déjà été importé" se pense au niveau du dossier déposé, pas d'un
+  // sous-dossier interne.
+  const byFolder = new Map();
+  for (const f of files) {
+    if (!f.relPath) continue; // fichier à la racine de l'inbox : pas de "dossier" à suivre
+    const topSegment = f.relPath.split(path.sep)[0];
+    if (!byFolder.has(topSegment)) byFolder.set(topSegment, []);
+    byFolder.get(topSegment).push(f.name);
+  }
+
+  const history = readImportHistory();
+  const folderWarnings = [];
+  for (const [folderName, fileNames] of byFolder) {
+    const warning = detectFolderWarning(folderName, fileNames, history);
+    if (warning) folderWarnings.push({ folderName, fileCount: fileNames.length, ...warning });
+  }
+
+  res.json({ inboxDir: INBOX_DIR, files, folderWarnings });
 });
 
 // API: BPM/tonalité d'un fichier de l'inbox (Essentia, ~6-9s, cache partagé) — alimente
@@ -152,6 +188,28 @@ router.post('/api/import/send', express.json(), async (req, res) => {
       moved.push({ oldPath: filePath, newPath: destPath, name: finalName, moods });
     } catch (err) {
       moveErrors.push({ file: name, error: err.message });
+    }
+  }
+
+  // Journalise l'import par dossier source (premier niveau de l'inbox) pour la détection
+  // "ce dossier a déjà été envoyé" au prochain chargement de l'inbox. Les fichiers déposés
+  // directement à la racine de l'inbox n'ont pas de dossier à suivre.
+  if (moved.length > 0) {
+    const byFolder = new Map();
+    for (const m of moved) {
+      const rel = path.relative(INBOX_DIR, m.oldPath);
+      const topSegment = path.dirname(rel).split(path.sep)[0];
+      if (topSegment === '.') continue;
+      if (!byFolder.has(topSegment)) byFolder.set(topSegment, []);
+      byFolder.get(topSegment).push(m.name);
+    }
+    if (byFolder.size > 0) {
+      const history = readImportHistory();
+      const importedAt = new Date().toISOString();
+      for (const [folderName, fileNames] of byFolder) {
+        history.push({ folderName, fileCount: fileNames.length, fileNames: [...fileNames].sort(), importedAt, destDir });
+      }
+      writeImportHistory(history);
     }
   }
 

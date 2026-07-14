@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import * as api from '../api';
-import type { InboxFile } from '../api';
+import type { InboxFile, FolderWarning } from '../api';
 import { moodColor } from '../moods';
+import { formatDate } from '../format';
 import { PlayIcon, PauseIcon, SparkleIcon, FolderIcon, WarnIcon, CheckIcon } from '../icons';
 
 interface SendResult {
@@ -39,6 +40,10 @@ export function ImportPanel({ availableMoods }: { availableMoods: string[] }) {
   const [batchAnalyzing, setBatchAnalyzing] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number; currentFile: string | null }>({ done: 0, total: 0, currentFile: null });
   const [batchSummary, setBatchSummary] = useState<{ done: number; failed: number; cancelled: boolean } | null>(null);
+  const [folderWarnings, setFolderWarnings] = useState<FolderWarning[]>([]);
+  // Dossiers dont l'avertissement a été explicitement traité (exclu ou ignoré) — purement
+  // local, pas persisté : réapparaît au prochain chargement si le dossier est toujours là.
+  const [dismissedWarnings, setDismissedWarnings] = useState<Set<string>>(new Set());
   const batchCancelRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement>(null);
 
@@ -51,6 +56,7 @@ export function ImportPanel({ availableMoods }: { availableMoods: string[] }) {
       if (!res.ok) throw new Error(data.error || 'Échec lecture inbox');
       setInboxDir(data.inboxDir);
       setFiles(data.files);
+      setFolderWarnings(data.folderWarnings || []);
       // Purge la sélection des fichiers qui ne sont plus listés
       setSelected(prev => {
         const listed = new Set(data.files.map((f: InboxFile) => f.path));
@@ -81,6 +87,20 @@ export function ImportPanel({ availableMoods }: { availableMoods: string[] }) {
 
   const toggleSelectAll = () => {
     setSelected(prev => prev.size === files.length ? new Set() : new Set(files.map(f => f.path)));
+  };
+
+  // Retire de la sélection tous les fichiers de ce dossier (premier niveau de l'inbox) —
+  // n'affecte pas les autres dossiers en cours de sélection.
+  const excludeFolder = (folderName: string) => {
+    setSelected(prev => new Set([...prev].filter(p => {
+      const f = files.find(x => x.path === p);
+      return !f || f.relPath.split('/')[0] !== folderName;
+    })));
+    setDismissedWarnings(prev => new Set(prev).add(folderName));
+  };
+
+  const dismissWarning = (folderName: string) => {
+    setDismissedWarnings(prev => new Set(prev).add(folderName));
   };
 
   const togglePlay = (path: string) => {
@@ -275,6 +295,23 @@ export function ImportPanel({ availableMoods }: { availableMoods: string[] }) {
           {batchSummary.failed > 0 && `, ${batchSummary.failed} échec(s) — voir le détail sur chaque ligne`}
         </div>
       )}
+
+      {folderWarnings.filter(w => !dismissedWarnings.has(w.folderName)).map(w => (
+        <div key={w.folderName} className={`import-folder-warning ${w.status}`}>
+          <WarnIcon size={13} />
+          <span className="import-folder-warning-text">
+            <strong>"{w.folderName}"</strong> ({w.fileCount} fichier{w.fileCount > 1 ? 's' : ''}) —{' '}
+            {w.status === 'confirmed'
+              ? <>déjà importé le {formatDate(new Date(w.importedAt).getTime())} (mêmes fichiers exacts)</>
+              : <>possiblement déjà importé le {formatDate(new Date(w.importedAt).getTime())} (même nombre de fichiers seulement — vérifie)</>}
+            {' '}→ <code>{w.destDir.split('/').pop()}</code>
+          </span>
+          <span className="import-folder-warning-actions">
+            <button onClick={() => excludeFolder(w.folderName)}>Exclure de la sélection</button>
+            <button onClick={() => dismissWarning(w.folderName)}>Ignorer, envoyer quand même</button>
+          </span>
+        </div>
+      ))}
 
       {loadError && <div className="import-error"><WarnIcon size={12} /> {loadError}</div>}
 

@@ -107,6 +107,16 @@ export interface InboxFile {
   relPath: string; // sous-dossier relatif dans l'inbox ('' si à la racine)
 }
 
+// Dossier de l'inbox qui ressemble à un import déjà envoyé — "confirmed" si les noms de
+// fichiers correspondent exactement à un envoi précédent, "possible" si seul le nombre coïncide.
+export interface FolderWarning {
+  folderName: string;
+  fileCount: number;
+  status: 'confirmed' | 'possible';
+  importedAt: string;
+  destDir: string;
+}
+
 export const API = '/api';
 
 // Encode un chemin de fichier en base64url (compatible UTF-8) pour l'URL de streaming —

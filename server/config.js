@@ -68,3 +68,7 @@ export const PROJECTS_DIR = process.env.PROJECTS_DIR || '/home/olivier/.nemesis-
 // Indexé par chemin+taille+mtime (pas par contenu — trop lent à hasher sur des
 // gros fichiers), partagé entre TOUS les projets.
 export const CACHE_DB_PATH = process.env.CACHE_DB_PATH || '/home/olivier/.nemesis-projects/cache.db';
+
+// Historique des dossiers déjà envoyés depuis la boîte de dépôt (onglet Import) — sert à
+// avertir si un dossier au même nom et au même nombre de fichiers est redéposé.
+export const IMPORT_HISTORY_FILE = process.env.IMPORT_HISTORY_FILE || path.join(PROJECTS_DIR, 'import-history.json');

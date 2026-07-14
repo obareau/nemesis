@@ -649,6 +649,61 @@ button, input, select {
 .import-summary svg { vertical-align: -2px; margin-right: 4px; }
 .import-summary-error { color: var(--error); font-size: 11.5px; }
 
+.import-folder-warning {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  border: 1px solid var(--warn, #e0a838);
+  font-size: 11.5px;
+  flex-wrap: wrap;
+}
+
+.import-folder-warning.confirmed { border-color: var(--error); }
+
+.import-folder-warning svg { flex-shrink: 0; color: var(--warn, #e0a838); }
+.import-folder-warning.confirmed svg { color: var(--error); }
+
+.import-folder-warning-text {
+  flex: 1;
+  min-width: 200px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.import-folder-warning-text strong { color: var(--fg-strong); }
+.import-folder-warning-text code {
+  background: var(--bg-panel-alt);
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--accent);
+}
+
+.import-folder-warning-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.import-folder-warning-actions button {
+  padding: 5px 10px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  color: var(--fg);
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.import-folder-warning-actions button:hover { border-color: var(--accent-border); }
+
 .panel-header {
   flex-shrink: 0;
   display: flex;
