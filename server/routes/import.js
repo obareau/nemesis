@@ -102,16 +102,24 @@ router.get('/api/import/stream/:encodedPath', (req, res) => {
 // playlists mood. Les fichiers déplacés RESTENT déplacés même si le push échoue
 // (ils sont en sécurité dans la bibliothèque, seule l'assignation playlist a raté) —
 // d'où une réponse 200 avec pushError plutôt qu'un 5xx trompeur.
+//
+// Moods PAR FICHIER (pas un seul jeu partagé pour tout le lot) : après un "Analyser +
+// suggérer tout" sur un import en masse, chaque morceau a déjà sa propre suggestion —
+// forcer un mood unique pour toute la sélection bloquait inutilement l'envoi. Les fichiers
+// sont regroupés par jeu de moods identique pour ne relancer le scan Navidrome qu'une fois
+// par groupe (pushFilesToNavidrome rescanne à chaque appel), pas une fois par fichier.
 router.post('/api/import/send', express.json(), async (req, res) => {
-  const { filePaths, moods } = req.body;
+  const { files } = req.body;
 
-  if (!Array.isArray(filePaths) || filePaths.length === 0) {
-    return res.status(400).json({ error: 'filePaths requis (array non vide)' });
+  if (!Array.isArray(files) || files.length === 0) {
+    return res.status(400).json({ error: 'files requis (array non vide)' });
   }
-  if (!Array.isArray(moods) || moods.length === 0) {
-    return res.status(400).json({ error: 'moods requis (au moins un mood sélectionné)' });
+  for (const f of files) {
+    if (!f.path || !Array.isArray(f.moods) || f.moods.length === 0) {
+      return res.status(400).json({ error: `moods requis pour "${f.path ? path.basename(f.path) : 'un fichier'}"` });
+    }
   }
-  if (filePaths.some(p => !isInboxPath(p))) {
+  if (files.some(f => !isInboxPath(f.path))) {
     return res.status(403).json({ error: 'Un des chemins sort de la boîte de dépôt' });
   }
 
@@ -121,7 +129,7 @@ router.post('/api/import/send', express.json(), async (req, res) => {
   const moved = [];
   const moveErrors = [];
 
-  for (const filePath of filePaths) {
+  for (const { path: filePath, moods } of files) {
     const name = path.basename(filePath);
     if (!fs.existsSync(filePath)) {
       moveErrors.push({ file: name, error: 'Fichier disparu de la boîte de dépôt (déjà déplacé ?)' });
@@ -141,17 +149,33 @@ router.post('/api/import/send', express.json(), async (req, res) => {
       }
 
       safeMoveSync(filePath, destPath);
-      moved.push({ oldPath: filePath, newPath: destPath, name: finalName });
+      moved.push({ oldPath: filePath, newPath: destPath, name: finalName, moods });
     } catch (err) {
       moveErrors.push({ file: name, error: err.message });
     }
+  }
+
+  const moodGroups = new Map();
+  for (const m of moved) {
+    const key = [...m.moods].sort().join('|');
+    if (!moodGroups.has(key)) moodGroups.set(key, { moods: m.moods, paths: [] });
+    moodGroups.get(key).paths.push(m.newPath);
   }
 
   let push = null;
   let pushError = null;
   if (moved.length > 0) {
     try {
-      push = await pushFilesToNavidrome(moved.map(m => m.newPath), moods);
+      const results = [];
+      let pushed = 0;
+      let failed = 0;
+      for (const { moods, paths } of moodGroups.values()) {
+        const r = await pushFilesToNavidrome(paths, moods);
+        pushed += r.pushed;
+        failed += r.failed;
+        results.push(...r.results);
+      }
+      push = { success: failed === 0, pushed, failed, results };
     } catch (err) {
       pushError = err.message;
     }

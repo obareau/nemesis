@@ -13,7 +13,7 @@ interface SendResult {
     success: boolean;
     pushed: number;
     failed: number;
-    results: { file: string; success: boolean; alreadyInLibrary?: boolean; error?: string }[];
+    results: { file: string; success: boolean; alreadyInLibrary?: boolean; error?: string; playlists?: { playlist: string }[] }[];
   } | null;
   pushError: string | null;
 }
@@ -175,8 +175,18 @@ export function ImportPanel({ availableMoods }: { availableMoods: string[] }) {
     });
   };
 
+  // Moods effectifs d'un fichier au moment de l'envoi : sa propre suggestion (Analyser +
+  // suggérer) en priorité, sinon les chips partagées choisies à la main — un import en
+  // masse déjà analysé n'a donc plus besoin qu'on choisisse un mood unique pour tout le
+  // lot, la sélection partagée ne sert plus que de repli pour les fichiers pas encore suggérés.
+  const effectiveMoods = (path: string): string[] =>
+    suggested[path]?.length ? suggested[path] : [...selectedMoods];
+
   const send = async () => {
-    if (selected.size === 0 || selectedMoods.size === 0 || sending) return;
+    const targets = [...selected];
+    if (targets.length === 0 || sending) return;
+    if (targets.some(p => effectiveMoods(p).length === 0)) return;
+
     setSending(true);
     setSendResult(null);
     const interval = setInterval(async () => {
@@ -187,7 +197,7 @@ export function ImportPanel({ availableMoods }: { availableMoods: string[] }) {
       } catch { /* sondage best-effort */ }
     }, 400);
     try {
-      const res = await api.importSend([...selected], [...selectedMoods]);
+      const res = await api.importSend(targets.map(path => ({ path, moods: effectiveMoods(path) })));
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Échec envoi');
       setSendResult(data);
@@ -208,6 +218,13 @@ export function ImportPanel({ availableMoods }: { availableMoods: string[] }) {
   const coveredCount = sendResult?.push?.results.filter(r => r.alreadyInLibrary).length || 0;
   const pushedToMoods = (sendResult?.push?.pushed || 0) - coveredCount;
   const destFolder = sendResult?.destDir ? sendResult.destDir.split('/').pop() : '';
+  const missingMoodsCount = [...selected].filter(p => effectiveMoods(p).length === 0).length;
+  // Les fichiers d'un même envoi peuvent avoir chacun leurs propres moods — le résumé
+  // liste les playlists réellement touchées plutôt que la sélection partagée (qui ne
+  // reflète que le repli, pas forcément ce qui a été utilisé).
+  const touchedPlaylists = sendResult?.push
+    ? [...new Set(sendResult.push.results.flatMap(r => r.playlists?.map(p => p.playlist) || []))]
+    : [];
 
   return (
     <div className="import-panel">
@@ -335,7 +352,7 @@ export function ImportPanel({ availableMoods }: { availableMoods: string[] }) {
 
       <div className="import-footer">
         <div className="import-moods">
-          <span className="import-moods-label">Mood(s) :</span>
+          <span className="import-moods-label" title="Repli pour les fichiers sans suggestion propre — un morceau déjà analysé garde son propre mood, pas besoin de le recocher ici">Mood(s) par défaut :</span>
           {availableMoods.map(m => (
             <button
               key={m}
@@ -355,8 +372,14 @@ export function ImportPanel({ availableMoods }: { availableMoods: string[] }) {
         <button
           className="import-send-btn"
           onClick={send}
-          disabled={selected.size === 0 || selectedMoods.size === 0 || sending}
-          title={selected.size === 0 ? 'Sélectionne au moins un fichier' : selectedMoods.size === 0 ? 'Choisis au moins un mood' : 'Déplace les fichiers dans la bibliothèque et les ajoute aux playlists mood'}
+          disabled={selected.size === 0 || missingMoodsCount > 0 || sending}
+          title={
+            selected.size === 0
+              ? 'Sélectionne au moins un fichier'
+              : missingMoodsCount > 0
+              ? `${missingMoodsCount} fichier(s) sélectionné(s) sans mood — lance "Suggérer" dessus ou coche un mood partagé ci-dessus comme repli`
+              : 'Déplace les fichiers dans la bibliothèque et les ajoute à leurs playlists mood (suggestion par fichier, ou mood(s) partagé(s) en repli)'
+          }
         >
           {sending
             ? sendProgress
@@ -385,7 +408,7 @@ export function ImportPanel({ availableMoods }: { availableMoods: string[] }) {
           <div className={`import-summary ${sendResult.success ? 'ok' : 'warn'}`}>
             {sendResult.moved.length > 0 && (
               <div><CheckIcon /> {sendResult.moved.length} déplacé(s) vers {destFolder}
-                {sendResult.push && <> · {pushedToMoods} dans les playlists {[...selectedMoods].join(', ') || 'mood'}{coveredCount > 0 && <> · {coveredCount} déjà au catalogue → Covers</>}</>}
+                {sendResult.push && <> · {pushedToMoods} dans {touchedPlaylists.length > 0 ? touchedPlaylists.join(', ') : 'des playlists mood'}{coveredCount > 0 && <> · {coveredCount} déjà au catalogue → Covers</>}</>}
               </div>
             )}
             {sendResult.moveErrors.map(e => (

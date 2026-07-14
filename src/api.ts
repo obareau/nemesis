@@ -224,8 +224,10 @@ export function importAnalyze(filePath: string) {
   return postJson('/import/analyze', { filePath });
 }
 
-export function importSend(filePaths: string[], moods: string[]) {
-  return postJson('/import/send', { filePaths, moods });
+// Moods par fichier — chaque morceau garde sa propre suggestion plutôt qu'un mood
+// unique forcé sur tout le lot envoyé.
+export function importSend(files: { path: string; moods: string[] }[]) {
+  return postJson('/import/send', { files });
 }
 
 // URL directe (pas un fetch) — passée telle quelle à l'élément <audio> de pré-écoute
