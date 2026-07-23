@@ -21,6 +21,17 @@ function shortGenreLabel(topStyle) {
   return parts[parts.length - 1];
 }
 
+// Repli quand le LLM ne donne pas de mood valide : une association déterministe
+// au BPM, toujours dans la liste SHOW_MOODS. Vide seulement si le BPM est inconnu
+// (morceau non analysable) — le fichier est quand même renommé et taggé.
+function fallbackMood(bpm) {
+  if (!bpm) return [];
+  if (bpm >= 130) return ['energetic'];
+  if (bpm >= 100) return ['driving'];
+  if (bpm >= 76) return ['reflective'];
+  return ['calm'];
+}
+
 // Progression du traitement en masse — même pattern que pushProgress (un seul
 // traitement actif à la fois, suivi par polling côté frontend).
 export const autoProcessProgress = { active: false, done: 0, total: 0, currentFile: null, stage: null };
@@ -122,8 +133,18 @@ export async function autoProcessAndPush(filePaths) {
         // Mood(s) — paroles et/ou bpm/tonalité, au moins un signal requis.
         // Calculé AVANT le titre : un instrumental (sans paroles) se titre
         // depuis son mood + son style, donc ces deux signaux doivent être prêts.
+        // NON BLOQUANT : generateMoodFromSignals lève si Ollama renvoie un mood
+        // hors liste ou s'il n'y a aucun signal — sans ce try/catch, un simple
+        // raté de mood faisait planter TOUT le fichier (ni genre, ni renommage).
+        // Repli déterministe sur le BPM pour ne jamais laisser un morceau sans
+        // mood (sinon Subwave ne le piochera dans aucune playlist mood).
         autoProcessProgress.stage = 'mood';
-        const moods = await generateMoodFromSignals({ lyrics, bpm, key, scale });
+        let moods = [];
+        try {
+          moods = await generateMoodFromSignals({ lyrics, bpm, key, scale });
+        } catch {
+          moods = fallbackMood(bpm);
+        }
 
         // Style réel (contenu audio) — Essentia/Discogs-Effnet, jamais déduit
         // du nom de fichier ou du BPM. Non bloquant : un échec laisse juste
