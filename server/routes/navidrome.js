@@ -1,20 +1,44 @@
 import express from 'express';
+import fs from 'fs';
 import path from 'path';
 import { NAVIDROME_LIBRARY_ROOT } from '../config.js';
 import { analysisState } from '../store.js';
 import { subsonicGet, listAllSongs } from '../navidrome.js';
 import { pushProgress, pushFilesToNavidrome } from '../navidromePush.js';
 import { autoProcessProgress, autoProcessAndPush } from '../autoProcess.js';
+import { getCachedAnalysis } from '../cache.js';
 
 const router = express.Router();
 
 // API: catalogue complet Navidrome (titre/artiste/chemin réel) — permet de cibler le
 // traitement en masse (auto-push) sur TOUTE la bibliothèque déjà importée, pas
 // seulement les fichiers d'un projet Curation actuellement ouvert (scan de dossier).
+//
+// Navidrome ne purge pas toujours les entrées d'un fichier renommé/déplacé lors
+// d'un scan rapide (startScan.view sans fullScan) — sa DB peut garder une ligne
+// fantôme avec l'ancien artiste/nom pour un fichier qui n'existe plus sur disque.
+// On filtre ici par fs.existsSync (source de vérité = le disque, pas la DB
+// Navidrome) pour ne jamais montrer un artiste périmé. Enrichit aussi chaque
+// morceau avec le cache d'analyse (bpm/tonalité/style) déjà calculé par le
+// pipeline, pour afficher la même info qu'en Curation sans tout ré-analyser.
 router.get('/api/navidrome/library', async (req, res) => {
   try {
     const songs = await listAllSongs();
-    res.json({ songs });
+    const enriched = songs
+      .filter(s => s.path && fs.existsSync(s.path))
+      .map(s => {
+        try {
+          const stat = fs.statSync(s.path);
+          const cached = getCachedAnalysis({ path: s.path, size: stat.size, mtime: stat.mtimeMs });
+          const genre = Array.isArray(cached?.genre) && cached.genre[0]?.label
+            ? cached.genre[0].label.split('---').pop()
+            : null;
+          return { ...s, bpm: cached?.bpm ?? null, key: cached?.key ?? null, scale: cached?.scale ?? null, genre };
+        } catch {
+          return { ...s, bpm: null, key: null, scale: null, genre: null };
+        }
+      });
+    res.json({ songs: enriched });
   } catch (err) {
     res.status(500).json({ error: `Lecture catalogue Navidrome échouée : ${err.message}` });
   }

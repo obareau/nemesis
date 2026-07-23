@@ -139,9 +139,10 @@ export async function autoProcessAndPush(filePaths) {
         // le fichier sans genre ID3 ni playlist de style.
         autoProcessProgress.stage = 'genre';
         let genre = null;
+        let styles = null;
         if (cacheRef) {
           const cached = getCachedAnalysis(cacheRef);
-          let styles = cached?.genre || null;
+          styles = cached?.genre || null;
           if (!styles) {
             styles = await analyzeGenre(filePath);
             if (styles) setCachedAnalysis(cacheRef, { genre: styles });
@@ -192,6 +193,20 @@ export async function autoProcessAndPush(filePaths) {
             safeMoveSync(filePath, newPath);
             applyRename(filePath, newPath, newName);
             renames.push({ oldPath: filePath, newPath, oldTags });
+
+            // Le cache est clé par path+size+mtime — l'ancienne clé devient
+            // orphelinée après le renommage (le fichier à cette clé n'existe
+            // plus), donc /api/navidrome/library ne retrouverait plus ni le BPM
+            // ni le style qu'on vient de calculer. Réécrit sous la NOUVELLE clé
+            // avec ce qu'on a déjà en mémoire — pas besoin de tout ré-analyser.
+            try {
+              const newStat = fs.statSync(newPath);
+              setCachedAnalysis(
+                { path: newPath, size: newStat.size, mtime: newStat.mtimeMs },
+                { bpm, key, scale, genre: styles, lyrics: lyrics || null }
+              );
+            } catch { /* pas bloquant — juste un cache de confort */ }
+
             filePath = newPath;
           }
         }

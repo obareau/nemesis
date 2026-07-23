@@ -35,6 +35,14 @@ export async function pushItemsToNavidrome(items) {
       throw e;
     }
 
+    // Scan complet en arrière-plan, sans bloquer le push : un scan rapide ajoute
+    // bien le fichier renommé mais ne purge pas toujours la ligne fantôme de
+    // l'ancien nom/artiste (elle reste en DB tant qu'un scan complet ne l'a pas
+    // constatée manquante sur disque). Best-effort — /api/navidrome/library filtre
+    // de toute façon par fs.existsSync, donc l'UI ne montre jamais le fantôme
+    // même avant que ce scan complet ne se termine.
+    subsonicGet('startScan.view', '&fullScan=true').catch(() => {});
+
     pushProgress.stage = 'push';
     const results = [];
     for (const { filePath, moods } of items) {

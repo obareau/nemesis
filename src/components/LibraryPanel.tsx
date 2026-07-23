@@ -147,6 +147,8 @@ export function LibraryPanel() {
             />
             <span className="import-col-name">Titre</span>
             <span className="import-col-artist">Artiste</span>
+            <span className="col-genre">Style</span>
+            <span className="import-col-bpm">BPM</span>
             <span className="import-col-size">Taille</span>
           </div>
           {filtered.map(s => (
@@ -161,6 +163,12 @@ export function LibraryPanel() {
                 {s.relPath && <span className="import-relpath">{s.relPath}</span>}
               </span>
               <span className="import-col-artist">{s.artist || '—'}</span>
+              <span className="col-genre" title={s.genre ? `Style détecté (Essentia) : ${s.genre}` : 'Style non détecté'}>
+                {s.genre && <span className="genre-badge">{s.genre}</span>}
+              </span>
+              <span className="import-col-bpm">
+                {s.bpm ? `${Math.round(s.bpm)}${s.key ? ` · ${s.key}${s.scale === 'minor' ? 'm' : ''}` : ''}` : '—'}
+              </span>
               <span className="import-col-size">{s.size ? `${(s.size / 1024 / 1024).toFixed(1)} MB` : '—'}</span>
             </div>
           ))}

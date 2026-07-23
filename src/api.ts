@@ -350,6 +350,10 @@ export interface NavidromeSong {
   path: string | null;
   size?: number;
   bitRate?: number;
+  bpm?: number | null;
+  key?: string | null;
+  scale?: string | null;
+  genre?: string | null;
 }
 
 // Catalogue complet Navidrome (pas limité au projet Curation ouvert) — sert de source
