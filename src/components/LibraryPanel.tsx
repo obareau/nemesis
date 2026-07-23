@@ -170,39 +170,42 @@ export function LibraryPanel() {
           <span>{q ? 'Aucun résultat pour ce filtre.' : 'Le catalogue Navidrome semble vide.'}</span>
         </div>
       ) : (
-        <div className="import-file-list">
-          <div className="import-row import-row-head">
-            <input
-              type="checkbox"
-              checked={filtered.length > 0 && selected.size === filtered.length}
-              onChange={toggleSelectAll}
-              title="Tout sélectionner"
-            />
-            <button className="lib-col-original col-sortable" onClick={() => toggleSort('original')}>Ancien nom{arrow('original')}</button>
-            <button className="import-col-name col-sortable" onClick={() => toggleSort('title')}>Nouveau nom / titre{arrow('title')}</button>
-            <button className="import-col-artist col-sortable" onClick={() => toggleSort('artist')}>Artiste{arrow('artist')}</button>
-            <span className="lib-col-moods">Mood / playlists</span>
-            <button className="col-genre col-sortable" onClick={() => toggleSort('genre')}>Style{arrow('genre')}</button>
-            <button className="import-col-bpm col-sortable" onClick={() => toggleSort('bpm')}>BPM{arrow('bpm')}</button>
-            <button className="import-col-size col-sortable" onClick={() => toggleSort('size')}>Taille{arrow('size')}</button>
-          </div>
-          {filtered.map(s => (
-            <div key={s.path} className={`import-row ${selected.has(s.path as string) ? 'selected' : ''}`}>
+        <div className="lib-table">
+          <div className="lib-row lib-head">
+            <span className="lib-cell lib-cell-check">
               <input
                 type="checkbox"
-                checked={selected.has(s.path as string)}
-                onChange={() => toggleSelect(s.path as string)}
+                checked={filtered.length > 0 && selected.size === filtered.length}
+                onChange={toggleSelectAll}
+                title="Tout sélectionner"
               />
-              <span className="lib-col-original" title={s.originalName ? `Nom avant traitement : ${s.originalName}` : 'Jamais renommé par Nemesis'}>
+            </span>
+            <button className="lib-cell col-sortable" onClick={() => toggleSort('original')}>Ancien nom{arrow('original')}</button>
+            <button className="lib-cell col-sortable" onClick={() => toggleSort('title')}>Nouveau nom{arrow('title')}</button>
+            <button className="lib-cell col-sortable" onClick={() => toggleSort('artist')}>Artiste{arrow('artist')}</button>
+            <span className="lib-cell">Mood / playlists</span>
+            <button className="lib-cell col-sortable" onClick={() => toggleSort('genre')}>Style{arrow('genre')}</button>
+            <button className="lib-cell lib-cell-num col-sortable" onClick={() => toggleSort('bpm')}>BPM{arrow('bpm')}</button>
+            <button className="lib-cell lib-cell-num col-sortable" onClick={() => toggleSort('size')}>Taille{arrow('size')}</button>
+          </div>
+          {filtered.map(s => (
+            <div key={s.path} className={`lib-row ${selected.has(s.path as string) ? 'selected' : ''}`}>
+              <span className="lib-cell lib-cell-check">
+                <input
+                  type="checkbox"
+                  checked={selected.has(s.path as string)}
+                  onChange={() => toggleSelect(s.path as string)}
+                />
+              </span>
+              <span className="lib-cell lib-muted" title={s.originalName ? `Nom avant traitement : ${s.originalName}` : 'Jamais renommé par Nemesis'}>
                 {s.originalName || <span className="lib-unchanged">—</span>}
               </span>
-              <span className="import-col-name" title={s.path || ''}>
+              <span className="lib-cell" title={s.path || ''}>
                 {s.currentName || s.title || '(sans titre)'}
-                {s.relPath && <span className="import-relpath">{s.relPath}</span>}
               </span>
-              <span className="import-col-artist">{s.artist || '—'}</span>
+              <span className="lib-cell lib-muted">{s.artist || '—'}</span>
               <span
-                className="lib-col-moods"
+                className="lib-cell lib-cell-moods"
                 title={s.playlists?.length ? `Playlists Navidrome : ${s.playlists.join(', ')}` : 'Pas encore traité — le mood sera déterminé au traitement'}
               >
                 {s.playlists?.length
@@ -213,13 +216,13 @@ export function LibraryPanel() {
                     ))
                   : <span className="lib-unchanged">à traiter</span>}
               </span>
-              <span className="col-genre" title={s.genre ? `Style détecté (Essentia) : ${s.genre}` : 'Style non détecté'}>
+              <span className="lib-cell" title={s.genre ? `Style détecté (Essentia) : ${s.genre}` : 'Style non détecté'}>
                 {s.genre && <span className="genre-badge">{s.genre}</span>}
               </span>
-              <span className="import-col-bpm">
+              <span className="lib-cell lib-cell-num">
                 {s.bpm ? `${Math.round(s.bpm)}${s.key ? ` · ${s.key}${s.scale === 'minor' ? 'm' : ''}` : ''}` : '—'}
               </span>
-              <span className="import-col-size">{s.size ? `${(s.size / 1024 / 1024).toFixed(1)} MB` : '—'}</span>
+              <span className="lib-cell lib-cell-num">{s.size ? `${(s.size / 1024 / 1024).toFixed(1)} MB` : '—'}</span>
             </div>
           ))}
         </div>

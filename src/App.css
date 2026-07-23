@@ -551,23 +551,67 @@ button, input, select {
 .import-col-artist { width: 160px; flex-shrink: 0; font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .import-col-actions { flex-shrink: 0; }
 
-.lib-col-original { width: 200px; flex-shrink: 0; font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+/* Bibliothèque : vraie table en CSS grid — mêmes colonnes pour l'en-tête et les
+   lignes, donc alignement garanti (le flexbox précédent décalait tout). */
+.lib-table {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  overflow-y: auto;
+  min-height: 0;
+}
+.lib-row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1.1fr) minmax(0, 1.4fr) minmax(0, 1fr) 220px 80px 78px 74px;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+}
+.lib-row:last-child { border-bottom: none; }
+.lib-row:not(.lib-head):hover { background: rgba(255, 255, 255, 0.03); }
+.lib-row.selected { background: rgba(224, 168, 56, 0.09); }
+.lib-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-panel-alt);
+  border-bottom: 1px solid var(--border-light);
+}
+.lib-cell {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+.lib-head .lib-cell {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-faint);
+}
+.lib-head button.lib-cell { background: transparent; border: none; padding: 0; cursor: pointer; }
+.lib-head button.lib-cell:hover { color: var(--fg); }
+.lib-cell-check { display: flex; align-items: center; overflow: visible; }
+.lib-cell-num { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-muted); }
+.lib-muted { color: var(--text-muted); }
 .lib-unchanged { color: var(--text-faint); }
-.lib-col-moods { width: 220px; flex-shrink: 0; display: flex; flex-wrap: wrap; gap: 3px; align-items: center; font-size: 10px; }
+.lib-cell-moods { display: flex; flex-wrap: nowrap; gap: 3px; align-items: center; overflow: hidden; }
 .mood-chip-tiny {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  padding: 1px 5px;
+  padding: 1px 6px;
   border: 1px solid var(--border-light);
   border-radius: 8px;
   font-size: 9.5px;
   color: var(--text-muted);
   white-space: nowrap;
+  flex-shrink: 0;
 }
-/* Les en-têtes de colonne triables sont des <button> — garder le même alignement que les cellules <span> correspondantes */
-.import-row-head .col-sortable { text-align: left; }
-.import-row-head .import-col-size.col-sortable { text-align: right; }
 
 .library-search {
   display: flex;
