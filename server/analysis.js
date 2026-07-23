@@ -311,13 +311,21 @@ export function analyzeAudioFeatures(filePath) {
 }
 
 // Style réel (contenu audio, pas le nom de fichier/BPM) via le classifieur Discogs-Effnet
-// (400 classes genre---style) — ~4-5s/fichier sur CPU, donc calculé à la demande comme
-// analyzeAudioFeatures, jamais pendant le scan en masse.
+// (400 classes genre---style). analyze_genre.py n'analyse qu'un extrait central (~90s)
+// au lieu du morceau entier — l'EffNet parcourt chaque seconde d'audio, donc borner
+// l'extrait borne le coût sans changer le style dominant détecté. Résout null en cas
+// d'échec (signal optionnel, non bloquant).
 export function analyzeGenre(filePath, topN = 3) {
   return new Promise((resolve) => {
     let proc;
     try {
-      proc = spawn(ESSENTIA_TF_PYTHON, [ANALYZE_GENRE_SCRIPT, filePath, String(topN)]);
+      // CUDA_VISIBLE_DEVICES='' force TF en CPU d'emblée : évite ~0,5s de probe
+      // CUDA voué à échouer (système en CUDA 13, TF réclame CUDA 11) et son spam
+      // d'erreurs, et surtout toute contention VRAM avec Iris. Le GPU n'apportait
+      // qu'un gain marginal ici (cf. essais) pour un vrai risque de crash bureau.
+      proc = spawn(ESSENTIA_TF_PYTHON, [ANALYZE_GENRE_SCRIPT, filePath, String(topN)], {
+        env: { ...process.env, CUDA_VISIBLE_DEVICES: '' }
+      });
     } catch {
       resolve(null);
       return;

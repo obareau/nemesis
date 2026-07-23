@@ -32,6 +32,16 @@ def main():
 
         audio = MonoLoader(filename=input_path, sampleRate=16000, resampleQuality=4)()
 
+        # L'EffNet traite chaque seconde d'audio → le coût est proportionnel à la
+        # durée. On ne garde qu'un extrait central de 90s : le style dominant d'un
+        # morceau ne change pas sur ses 3-4 min, mais l'inférence est ~2-3x plus
+        # rapide. (Extrait centré : évite intro/outro souvent atypiques.)
+        SR = 16000
+        MAX_SEC = 90
+        if len(audio) > MAX_SEC * SR:
+            start = (len(audio) - MAX_SEC * SR) // 2
+            audio = audio[start:start + MAX_SEC * SR]
+
         embedding_model = TensorflowPredictEffnetDiscogs(graphFilename=EMBEDDING_MODEL, output="PartitionedCall:1")
         embeddings = embedding_model(audio)
 
