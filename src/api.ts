@@ -354,6 +354,9 @@ export interface NavidromeSong {
   key?: string | null;
   scale?: string | null;
   genre?: string | null;
+  currentName?: string;        // basename actuel sur disque
+  originalName?: string | null; // nom avant renommage Nemesis (null si jamais renommé)
+  playlists?: string[];         // playlists Navidrome où le morceau est présent (= ses moods/style/Covers)
 }
 
 // Catalogue complet Navidrome (pas limité au projet Curation ouvert) — sert de source

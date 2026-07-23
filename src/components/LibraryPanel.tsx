@@ -1,7 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import * as api from '../api';
 import type { NavidromeSong } from '../api';
+import { moodColor } from '../moods';
 import { WarnIcon, CheckIcon } from '../icons';
+
+type SortKey = 'title' | 'artist' | 'genre' | 'bpm' | 'key' | 'size' | 'original';
 
 interface AutoProcessResult {
   processed: {
@@ -32,6 +35,8 @@ export function LibraryPanel() {
   const [progress, setProgress] = useState<{ done: number; total: number; currentFile: string | null; stage: string | null } | null>(null);
   const [result, setResult] = useState<AutoProcessResult | null>(null);
   const [resultError, setResultError] = useState<string | null>(null);
+  const [sortKey, setSortKey] = useState<SortKey | null>(null);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
   const loadLibrary = useCallback(async () => {
     setLoading(true);
@@ -51,9 +56,37 @@ export function LibraryPanel() {
   useEffect(() => { loadLibrary(); }, [loadLibrary]);
 
   const q = search.trim().toLowerCase();
-  const filtered = q
-    ? songs.filter(s => s.title?.toLowerCase().includes(q) || s.artist?.toLowerCase().includes(q) || s.relPath?.toLowerCase().includes(q))
-    : songs;
+  const filtered = useMemo(() => {
+    const base = q
+      ? songs.filter(s => s.title?.toLowerCase().includes(q) || s.artist?.toLowerCase().includes(q) || s.relPath?.toLowerCase().includes(q) || s.originalName?.toLowerCase().includes(q))
+      : songs;
+    if (!sortKey) return base;
+    const dir = sortDir === 'asc' ? 1 : -1;
+    const str = (v?: string | null) => (v || '').toLowerCase();
+    return [...base].sort((a, b) => {
+      switch (sortKey) {
+        case 'title': return str(a.title).localeCompare(str(b.title)) * dir;
+        case 'artist': return str(a.artist).localeCompare(str(b.artist)) * dir;
+        case 'genre': return str(a.genre).localeCompare(str(b.genre)) * dir;
+        case 'key': return str(a.key).localeCompare(str(b.key)) * dir;
+        case 'original': return str(a.originalName || a.currentName).localeCompare(str(b.originalName || b.currentName)) * dir;
+        case 'bpm': return ((a.bpm ?? -1) - (b.bpm ?? -1)) * dir;
+        case 'size': return ((a.size ?? -1) - (b.size ?? -1)) * dir;
+        default: return 0;
+      }
+    });
+  }, [songs, q, sortKey, sortDir]);
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      if (sortDir === 'asc') setSortDir('desc');
+      else { setSortKey(null); setSortDir('asc'); }
+    } else {
+      setSortKey(key);
+      setSortDir('asc');
+    }
+  };
+  const arrow = (key: SortKey) => (sortKey === key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '');
 
   const toggleSelect = (path: string) => {
     setSelected(prev => {
@@ -145,11 +178,13 @@ export function LibraryPanel() {
               onChange={toggleSelectAll}
               title="Tout sélectionner"
             />
-            <span className="import-col-name">Titre</span>
-            <span className="import-col-artist">Artiste</span>
-            <span className="col-genre">Style</span>
-            <span className="import-col-bpm">BPM</span>
-            <span className="import-col-size">Taille</span>
+            <button className="lib-col-original col-sortable" onClick={() => toggleSort('original')}>Ancien nom{arrow('original')}</button>
+            <button className="import-col-name col-sortable" onClick={() => toggleSort('title')}>Nouveau nom / titre{arrow('title')}</button>
+            <button className="import-col-artist col-sortable" onClick={() => toggleSort('artist')}>Artiste{arrow('artist')}</button>
+            <span className="lib-col-moods">Mood / playlists</span>
+            <button className="col-genre col-sortable" onClick={() => toggleSort('genre')}>Style{arrow('genre')}</button>
+            <button className="import-col-bpm col-sortable" onClick={() => toggleSort('bpm')}>BPM{arrow('bpm')}</button>
+            <button className="import-col-size col-sortable" onClick={() => toggleSort('size')}>Taille{arrow('size')}</button>
           </div>
           {filtered.map(s => (
             <div key={s.path} className={`import-row ${selected.has(s.path as string) ? 'selected' : ''}`}>
@@ -158,11 +193,26 @@ export function LibraryPanel() {
                 checked={selected.has(s.path as string)}
                 onChange={() => toggleSelect(s.path as string)}
               />
+              <span className="lib-col-original" title={s.originalName ? `Nom avant traitement : ${s.originalName}` : 'Jamais renommé par Nemesis'}>
+                {s.originalName || <span className="lib-unchanged">—</span>}
+              </span>
               <span className="import-col-name" title={s.path || ''}>
-                {s.title || '(sans titre)'}
+                {s.currentName || s.title || '(sans titre)'}
                 {s.relPath && <span className="import-relpath">{s.relPath}</span>}
               </span>
               <span className="import-col-artist">{s.artist || '—'}</span>
+              <span
+                className="lib-col-moods"
+                title={s.playlists?.length ? `Playlists Navidrome : ${s.playlists.join(', ')}` : 'Pas encore traité — le mood sera déterminé au traitement'}
+              >
+                {s.playlists?.length
+                  ? s.playlists.map(p => (
+                      <span key={p} className="mood-chip-tiny" style={{ borderColor: moodColor(p) }}>
+                        <span className="mood-dot-mini" style={{ background: moodColor(p) }} />{p}
+                      </span>
+                    ))
+                  : <span className="lib-unchanged">à traiter</span>}
+              </span>
               <span className="col-genre" title={s.genre ? `Style détecté (Essentia) : ${s.genre}` : 'Style non détecté'}>
                 {s.genre && <span className="genre-badge">{s.genre}</span>}
               </span>

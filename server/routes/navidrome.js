@@ -7,6 +7,7 @@ import { subsonicGet, listAllSongs } from '../navidrome.js';
 import { pushProgress, pushFilesToNavidrome } from '../navidromePush.js';
 import { autoProcessProgress, autoProcessAndPush } from '../autoProcess.js';
 import { getCachedAnalysis } from '../cache.js';
+import { allRenames } from '../rename-history.js';
 
 const router = express.Router();
 
@@ -24,18 +25,40 @@ const router = express.Router();
 router.get('/api/navidrome/library', async (req, res) => {
   try {
     const songs = await listAllSongs();
+    const renameMap = allRenames();
+
+    // Index songId → noms de playlists : c'est là qu'on lit "dans quel mood va
+    // ce morceau" — les moods (et le style, et Covers) SONT des playlists
+    // Navidrome. Vide pour un morceau pas encore traité (on ne peut pas prédire
+    // le mood sans lancer le LLM ; il apparaît une fois le morceau poussé).
+    const songPlaylists = new Map();
+    try {
+      const { playlists } = await subsonicGet('getPlaylists.view');
+      for (const pl of playlists?.playlist || []) {
+        const { playlist } = await subsonicGet('getPlaylist.view', `&id=${pl.id}`);
+        for (const entry of playlist?.entry || []) {
+          if (!songPlaylists.has(entry.id)) songPlaylists.set(entry.id, []);
+          const arr = songPlaylists.get(entry.id);
+          if (!arr.includes(pl.name)) arr.push(pl.name);
+        }
+      }
+    } catch { /* playlists best-effort — la liste reste utile sans elles */ }
+
     const enriched = songs
       .filter(s => s.path && fs.existsSync(s.path))
       .map(s => {
+        const originalName = renameMap[s.path] || null;
+        const currentName = path.basename(s.path);
+        const playlists = songPlaylists.get(s.id) || [];
         try {
           const stat = fs.statSync(s.path);
           const cached = getCachedAnalysis({ path: s.path, size: stat.size, mtime: stat.mtimeMs });
           const genre = Array.isArray(cached?.genre) && cached.genre[0]?.label
             ? cached.genre[0].label.split('---').pop()
             : null;
-          return { ...s, bpm: cached?.bpm ?? null, key: cached?.key ?? null, scale: cached?.scale ?? null, genre };
+          return { ...s, currentName, originalName, playlists, bpm: cached?.bpm ?? null, key: cached?.key ?? null, scale: cached?.scale ?? null, genre };
         } catch {
-          return { ...s, bpm: null, key: null, scale: null, genre: null };
+          return { ...s, currentName, originalName, playlists, bpm: null, key: null, scale: null, genre: null };
         }
       });
     res.json({ songs: enriched });

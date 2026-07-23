@@ -551,6 +551,24 @@ button, input, select {
 .import-col-artist { width: 160px; flex-shrink: 0; font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .import-col-actions { flex-shrink: 0; }
 
+.lib-col-original { width: 200px; flex-shrink: 0; font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.lib-unchanged { color: var(--text-faint); }
+.lib-col-moods { width: 220px; flex-shrink: 0; display: flex; flex-wrap: wrap; gap: 3px; align-items: center; font-size: 10px; }
+.mood-chip-tiny {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 5px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  font-size: 9.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+/* Les en-têtes de colonne triables sont des <button> — garder le même alignement que les cellules <span> correspondantes */
+.import-row-head .col-sortable { text-align: left; }
+.import-row-head .import-col-size.col-sortable { text-align: right; }
+
 .library-search {
   display: flex;
   align-items: center;

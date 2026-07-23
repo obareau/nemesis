@@ -9,6 +9,7 @@ import { analyzeAudioFeatures, transcribeLyrics, analyzeGenre } from './analysis
 import { readTags, writeTags } from './tagging.js';
 import { safeMoveSync } from './fsUtils.js';
 import { findExistingAuthor, recordAuthor } from './title-authors.js';
+import { recordRename } from './rename-history.js';
 import { generateTitleFromLyrics, generateMoodFromSignals, generateAuthorForTrack } from './ollamaGen.js';
 import { pushItemsToNavidrome } from './navidromePush.js';
 
@@ -192,6 +193,7 @@ export async function autoProcessAndPush(filePaths) {
           if (newPath !== filePath) {
             safeMoveSync(filePath, newPath);
             applyRename(filePath, newPath, newName);
+            recordRename(filePath, newPath);
             renames.push({ oldPath: filePath, newPath, oldTags });
 
             // Le cache est clé par path+size+mtime — l'ancienne clé devient
