@@ -127,6 +127,10 @@ export function applyLyrics(filePath, lyrics) {
   applyToFile(filePath, (f) => { f.lyrics = lyrics; });
 }
 
+export function applyTitle(filePath, title) {
+  applyToFile(filePath, (f) => { f.title = title; });
+}
+
 export function applyBitrate(filePath, bitrate) {
   applyToFile(filePath, (f) => { f.bitrate = bitrate; });
 }

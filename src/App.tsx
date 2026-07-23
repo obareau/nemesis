@@ -108,6 +108,9 @@ function App() {
   const [pushToNavidrome, setPushToNavidrome] = useState(false);
   const [pushingNavidrome, setPushingNavidrome] = useState(false);
   const [navidromeProgress, setNavidromeProgress] = useState<{ done: number; total: number; currentFile: string | null } | null>(null);
+  const [autoProcessing, setAutoProcessing] = useState(false);
+  const [autoProcessProgress, setAutoProcessProgress] = useState<{ done: number; total: number; currentFile: string | null; stage: string | null } | null>(null);
+  const [autoProcessNotice, setAutoProcessNotice] = useState<string | null>(null);
   const [similarMin, setSimilarMin] = useState(80);
   const [similarMax, setSimilarMax] = useState(95);
   const [showSimilar, setShowSimilar] = useState(false);
@@ -219,6 +222,59 @@ function App() {
         // sondage best-effort — pas bloquant si ça échoue ponctuellement
       }
     }, 400);
+  };
+
+  // Même sondage, pour le traitement en masse (analyse → paroles → titre →
+  // mood → push), qui traite chaque fichier indépendamment et peut prendre
+  // bien plus longtemps que le push seul (transcription incluse).
+  const pollAutoProcessProgress = () => {
+    return setInterval(async () => {
+      try {
+        const res = await api.getAutoPushProgress();
+        const data = await res.json();
+        setAutoProcessProgress(data.active ? { done: data.done, total: data.total, currentFile: data.currentFile, stage: data.stage } : null);
+      } catch {
+        // sondage best-effort — pas bloquant si ça échoue ponctuellement
+      }
+    }, 400);
+  };
+
+  // Traite un lot de morceaux INDÉPENDANTS (pas un groupe de doublons qui
+  // partage un même auteur/mood) : chaque fichier obtient son propre titre
+  // (depuis ses propres paroles) et ses propres moods (paroles + bpm/
+  // tonalité), puis est poussé vers SA PROPRE playlist Navidrome.
+  const handleAutoProcessBatch = async () => {
+    if (selectedFiles.size === 0) {
+      setAutoProcessNotice('⚠️ Sélectionne au moins un fichier');
+      return;
+    }
+    setAutoProcessing(true);
+    setAutoProcessNotice(null);
+    const interval = pollAutoProcessProgress();
+    try {
+      const res = await api.autoPushBatch(Array.from(selectedFiles));
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Échec du traitement en masse');
+
+      const okCount = data.processed.filter((r: { success: boolean }) => r.success).length;
+      const titled = data.processed.filter((r: { title?: string | null }) => r.title).length;
+      const failed = data.processed.length - okCount;
+      let notice = `✓ ${okCount}/${data.processed.length} traité(s)`;
+      if (titled > 0) notice += ` · ${titled} titre(s) généré(s)`;
+      if (data.push?.pushed) notice += ` · ${data.push.pushed} envoyé(s) vers Navidrome`;
+      if (failed > 0) notice += ` · ${failed} échec(s)`;
+      setAutoProcessNotice(notice);
+
+      const statusRes = await api.getStatus();
+      const newState = await statusRes.json();
+      setState(newState);
+    } catch (err) {
+      setAutoProcessNotice(`⚠️ ${String(err instanceof Error ? err.message : err)}`);
+    } finally {
+      clearInterval(interval);
+      setAutoProcessProgress(null);
+      setAutoProcessing(false);
+    }
   };
   const [confirmDeleteProject, setConfirmDeleteProject] = useState<string | null>(null);
   const [deletingProject, setDeletingProject] = useState(false);
@@ -1716,6 +1772,14 @@ function App() {
     selectionAnchorRef.current = filePath;
   };
 
+  const toggleSelectAll = (files: File[]) => {
+    if (selectedFiles.size === files.length && files.length > 0) {
+      setSelectedFiles(new Set());
+    } else {
+      setSelectedFiles(new Set(files.map(f => f.path)));
+    }
+  };
+
   // Sélection façon Explorer/Finder : clic simple = sélection exclusive, Ctrl/Cmd = ajout/retrait
   // individuel, Shift = plage contiguë depuis le dernier fichier cliqué (l'ordre visible = sortedFiles).
   const handleFileRowClick = (e: React.MouseEvent, filePath: string, orderedFiles: File[]) => {
@@ -2122,6 +2186,34 @@ function App() {
             </div>
           </section>
 
+          <section className="panel-section">
+            <h2><TagIcon /> Traitement en masse (morceaux inconnus)</h2>
+            <div className="rename-options">
+              <p>
+                Contrairement au renommage ci-dessus (un auteur/mood partagé pour tout le
+                groupe), ici chaque fichier sélectionné obtient son propre titre (depuis
+                ses propres paroles) et ses propres moods (paroles + BPM/tonalité), puis
+                est envoyé vers sa propre playlist Navidrome — pour un lot de morceaux
+                indépendants, pas encore triés un par un.
+              </p>
+              <button
+                className="rename-btn"
+                onClick={handleAutoProcessBatch}
+                disabled={autoProcessing || selectedFiles.size === 0}
+              >
+                {autoProcessing
+                  ? autoProcessProgress
+                    ? `${autoProcessProgress.stage ?? 'Traitement'}… ${autoProcessProgress.done}/${autoProcessProgress.total}`
+                    : 'Traitement…'
+                  : `Traiter la sélection (${selectedFiles.size})`}
+              </button>
+              {autoProcessing && autoProcessProgress?.currentFile && (
+                <div className="navidrome-push-current">→ {autoProcessProgress.currentFile}</div>
+              )}
+              {autoProcessNotice && <div className="rename-notice">{autoProcessNotice}</div>}
+            </div>
+          </section>
+
           <button className="scan-btn" onClick={handleScanDirectory}>
             <FolderIcon />
             Scanner un répertoire
@@ -2278,7 +2370,16 @@ function App() {
           ) : (
             <div className="file-list">
               <div className="file-list-head">
-                <span className="col-check" />
+                <input
+                  type="checkbox"
+                  className="file-checkbox col-check"
+                  checked={selectedFiles.size > 0 && selectedFiles.size === visibleFiles.length}
+                  ref={(el) => {
+                    if (el) el.indeterminate = selectedFiles.size > 0 && selectedFiles.size < visibleFiles.length;
+                  }}
+                  onChange={() => toggleSelectAll(visibleFiles)}
+                  title="Tout sélectionner / désélectionner"
+                />
                 <span className="col-num">#</span>
                 <button className="col-name col-sortable" onClick={() => toggleSort('name')}>
                   Nom {sortKey === 'name' && (sortDir === 'asc' ? '▲' : '▼')}

@@ -4,6 +4,7 @@ import { NAVIDROME_LIBRARY_ROOT } from '../config.js';
 import { analysisState } from '../store.js';
 import { subsonicGet } from '../navidrome.js';
 import { pushProgress, pushFilesToNavidrome } from '../navidromePush.js';
+import { autoProcessProgress, autoProcessAndPush } from '../autoProcess.js';
 
 const router = express.Router();
 
@@ -68,6 +69,34 @@ router.post('/api/navidrome/push', express.json(), async (req, res) => {
       return res.status(504).json({ error: err.message });
     }
     res.status(500).json({ error: `Push Navidrome échoué : ${err.message}` });
+  }
+});
+
+// API: Progression du traitement en masse en cours (polling)
+router.get('/api/navidrome/auto-push-progress', (req, res) => {
+  res.json(autoProcessProgress);
+});
+
+// API: Traitement en masse pour un lot de morceaux INDÉPENDANTS (pas un
+// groupe de doublons partageant un même mood) — pour chaque fichier : titre
+// généré depuis ses propres paroles, mood(s) générés depuis ses propres
+// paroles/BPM/tonalité, poussé vers SA PROPRE playlist Navidrome. Contraste
+// avec /api/navidrome/push, qui applique les mêmes moods à tout le lot.
+router.post('/api/navidrome/auto-push', express.json(), async (req, res) => {
+  const { filePaths } = req.body;
+
+  if (!Array.isArray(filePaths) || filePaths.length === 0) {
+    return res.status(400).json({ error: 'filePaths requis (array non vide)' });
+  }
+
+  try {
+    const result = await autoProcessAndPush(filePaths);
+    res.json(result);
+  } catch (err) {
+    if (err.code === 'SCAN_TIMEOUT') {
+      return res.status(504).json({ error: err.message });
+    }
+    res.status(500).json({ error: `Traitement en masse échoué : ${err.message}` });
   }
 });
 

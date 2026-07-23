@@ -12,14 +12,20 @@ import {
 // le même objet, jamais une réaffectation locale.
 export const pushProgress = { active: false, done: 0, total: 0, currentFile: null, stage: null };
 
-// Coeur du push Navidrome, partagé entre le push curation (/api/navidrome/push) et
-// l'onglet Import (/api/import/send) : rescan bibliothèque → pour chaque fichier,
-// retrouve le morceau par titre ID3, route les doublons déjà catalogués vers "Covers",
-// sinon ajoute aux playlists mood (créées publiques au besoin). Journalise dans
-// l'actionLog du projet actif (no-op sans projet : applyNavidromePushed ne trouve
-// rien, persistProject sort sans dirPath).
-export async function pushFilesToNavidrome(filePaths, moods) {
-  Object.assign(pushProgress, { active: true, done: 0, total: filePaths.length, currentFile: null, stage: 'scan' });
+// Coeur du push Navidrome, partagé entre le push curation (/api/navidrome/push),
+// l'onglet Import (/api/import/send) et le traitement en masse
+// (autoProcess.autoProcessAndPush) : rescan bibliothèque → pour chaque item,
+// retrouve le morceau par titre ID3, route les doublons déjà catalogués vers
+// "Covers", sinon ajoute aux playlists mood DE CET ITEM (créées publiques au
+// besoin). Journalise dans l'actionLog du projet actif (no-op sans projet :
+// applyNavidromePushed ne trouve rien, persistProject sort sans dirPath).
+//
+// items: [{ filePath, moods }] — moods est propre à CHAQUE item, contrairement
+// à l'ancienne signature (filePaths, moods) qui appliquait les mêmes moods à
+// tout le lot (toujours valable pour un groupe de doublons déjà trié à la
+// main — voir pushFilesToNavidrome ci-dessous, conservée telle quelle).
+export async function pushItemsToNavidrome(items) {
+  Object.assign(pushProgress, { active: true, done: 0, total: items.length, currentFile: null, stage: 'scan' });
   try {
     await subsonicGet('startScan.view');
     const scanned = await waitForScanCompletion();
@@ -31,7 +37,7 @@ export async function pushFilesToNavidrome(filePaths, moods) {
 
     pushProgress.stage = 'push';
     const results = [];
-    for (const filePath of filePaths) {
+    for (const { filePath, moods } of items) {
       const fileName = path.basename(filePath);
       pushProgress.currentFile = fileName;
       try {
@@ -96,4 +102,10 @@ export async function pushFilesToNavidrome(filePaths, moods) {
   } finally {
     Object.assign(pushProgress, { active: false, done: 0, total: 0, currentFile: null, stage: null });
   }
+}
+
+// Conservée pour compat : un même mood partagé par tout le lot — le cas d'un
+// groupe déjà trié à la main (Import, push curation).
+export function pushFilesToNavidrome(filePaths, moods) {
+  return pushItemsToNavidrome(filePaths.map((filePath) => ({ filePath, moods })));
 }

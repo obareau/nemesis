@@ -11,6 +11,7 @@ export interface File {
   bitrate?: number; // bits/sec (ffprobe format=bit_rate), pas encore extrait tant que l'étape "bitrate" du scan n'est pas passée
   fingerprint?: string;
   lyrics?: string;
+  title?: string;
   rating?: number;
   bpm?: number;
   key?: string;
@@ -224,6 +225,17 @@ export function navidromePush(filePaths: string[], moods: string[]) {
 
 export function getNavidromePushProgress() {
   return fetch(`${API}/navidrome/push-progress`);
+}
+
+// Traitement en masse : contrairement à navidromePush (mêmes moods pour tout
+// le lot), chaque fichier obtient son propre titre (paroles) et ses propres
+// moods (paroles + bpm/tonalité), puis sa propre playlist Navidrome.
+export function autoPushBatch(filePaths: string[]) {
+  return postJson('/navidrome/auto-push', { filePaths });
+}
+
+export function getAutoPushProgress() {
+  return fetch(`${API}/navidrome/auto-push-progress`);
 }
 
 export function getImportInbox() {
