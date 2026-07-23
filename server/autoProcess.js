@@ -10,7 +10,7 @@ import { readTags, writeTags } from './tagging.js';
 import { safeMoveSync } from './fsUtils.js';
 import { findExistingAuthor, recordAuthor } from './title-authors.js';
 import { recordRename } from './rename-history.js';
-import { generateTitleFromLyrics, generateMoodFromSignals, generateAuthorForTrack } from './ollamaGen.js';
+import { generateTitleFromLyrics, generateTitleFromMoodStyle, generateMoodFromSignals, generateAuthorForTrack } from './ollamaGen.js';
 import { pushItemsToNavidrome } from './navidromePush.js';
 
 // Style Discogs ("Electronic---Techno") → juste la partie style, plus lisible
@@ -119,19 +119,9 @@ export async function autoProcessAndPush(filePaths) {
           }
         }
 
-        // Titre — seulement s'il y a des paroles à résumer.
-        autoProcessProgress.stage = 'title';
-        let title = null;
-        if (lyrics && lyrics.trim()) {
-          try {
-            title = await generateTitleFromLyrics(lyrics);
-            applyTitle(filePath, title);
-          } catch {
-            title = null; // Ollama down ou réponse invalide — le fichier garde son titre existant
-          }
-        }
-
         // Mood(s) — paroles et/ou bpm/tonalité, au moins un signal requis.
+        // Calculé AVANT le titre : un instrumental (sans paroles) se titre
+        // depuis son mood + son style, donc ces deux signaux doivent être prêts.
         autoProcessProgress.stage = 'mood';
         const moods = await generateMoodFromSignals({ lyrics, bpm, key, scale });
 
@@ -152,15 +142,30 @@ export async function autoProcessAndPush(filePaths) {
           if (genre) applyGenre(filePath, genre);
         }
 
+        // Titre — depuis le refrain si paroles (les lignes qui reviennent le
+        // plus), sinon depuis le mood + style pour un instrumental.
+        autoProcessProgress.stage = 'title';
+        let title = null;
+        try {
+          if (lyrics && lyrics.trim()) {
+            title = await generateTitleFromLyrics(lyrics);
+          } else if (moods.length || genre) {
+            title = await generateTitleFromMoodStyle({ moods, style: genre || '' });
+          }
+          if (title) applyTitle(filePath, title);
+        } catch {
+          title = null; // Ollama down ou réponse invalide — le fichier garde son titre existant
+        }
+
         // Artiste fictif — réutilisé si ce nom de fichier a déjà été vu
-        // ailleurs (title-authors.js), sinon généré et mémorisé AVANT le
-        // renommage (sur le nom d'origine, comme /api/rename-bulk).
+        // ailleurs (title-authors.js), sinon généré (en collant au mood + style)
+        // et mémorisé AVANT le renommage (sur le nom d'origine, comme /api/rename-bulk).
         autoProcessProgress.stage = 'author';
         let author = findExistingAuthor([originalName]);
         let authorReused = !!author;
         if (!author) {
           try {
-            author = await generateAuthorForTrack([originalName], moods.join(', ') || genre || '');
+            author = await generateAuthorForTrack([originalName], moods.join(', '), genre || '');
             recordAuthor([originalName], author);
           } catch {
             author = null; // Ollama down — pas de renommage possible sans artiste
