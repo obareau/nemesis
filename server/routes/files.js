@@ -9,6 +9,7 @@ import { getCachedAnalysis, setCachedAnalysis } from '../cache.js';
 import { analyzeAudioFeatures, transcribeLyrics, probeDuration, probeBitrate, runFfmpeg } from '../analysis.js';
 import { safeMoveSync } from '../fsUtils.js';
 import { readTags, writeTags, audioCodecArgsFor } from '../tagging.js';
+import { findExistingAuthor, recordAuthor } from '../title-authors.js';
 
 const router = express.Router();
 
@@ -174,6 +175,12 @@ router.post('/api/rename-bulk', express.json(), async (req, res) => {
     return res.status(400).json({ error: 'author requis' });
   }
 
+  // Mémorise l'association titre→auteur (sur les noms d'origine, avant
+  // renommage) pour que toute future occurrence du même titre — même hors de
+  // ce groupe, même dans un import ultérieur — retombe sur le même artiste
+  // fictif, y compris quand l'auteur a été tapé à la main plutôt que généré.
+  recordAuthor(filePaths.map(p => path.basename(p)), author.trim());
+
   const results = [];
   const renames = [];
 
@@ -301,6 +308,17 @@ router.post('/api/rename-file', express.json(), (req, res) => {
 router.post('/api/generate-author', express.json(), async (req, res) => {
   const { trackNames = [], mood = '' } = req.body;
 
+  // Même titre (nom de fichier normalisé) déjà croisé ailleurs dans la
+  // bibliothèque → réutilise le même artiste fictif plutôt que d'en inventer
+  // un nouveau. Plus cohérent (deux versions d'un même morceau restent "du
+  // même artiste"), et ça aide Subwave à espacer les répétitions : il évite
+  // déjà de rejouer le même artiste à la suite, donc ça évite aussi de
+  // rejouer la même chanson sous un nom d'artiste différent juste après.
+  const existingAuthor = findExistingAuthor(trackNames);
+  if (existingAuthor) {
+    return res.json({ author: existingAuthor, reused: true });
+  }
+
   const sample = trackNames.slice(0, 8).join(', ') || 'morceaux électroniques';
   const prompt = `Tu es un générateur de noms d'artistes fictifs pour une radio IA underground.
 Ambiance/mood : ${mood || 'inconnu'}
@@ -336,6 +354,7 @@ Réponds uniquement au format JSON strict : {"author": "..."}`;
 
     if (!author) throw new Error('Réponse Ollama vide ou invalide');
 
+    recordAuthor(trackNames, author.trim());
     res.json({ author: author.trim() });
   } catch (err) {
     res.status(500).json({ error: `Génération échouée : ${err.message}` });
