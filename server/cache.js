@@ -20,35 +20,40 @@ cacheDb.exec(`
     PRIMARY KEY (path, size, mtime)
   )
 `);
-// Ajoute les colonnes bpm/key/scale si la base existait déjà sans (migration silencieuse)
-for (const col of ['bpm REAL', 'key TEXT', 'scale TEXT']) {
+// Ajoute les colonnes bpm/key/scale/genre si la base existait déjà sans (migration silencieuse)
+for (const col of ['bpm REAL', 'key TEXT', 'scale TEXT', 'genre TEXT']) {
   try { cacheDb.exec(`ALTER TABLE analysis_cache ADD COLUMN ${col}`); } catch { /* déjà présente */ }
 }
 
 const cacheGetStmt = cacheDb.prepare(
-  'SELECT fingerprint, lyrics, bpm, key, scale FROM analysis_cache WHERE path = ? AND size = ? AND mtime = ?'
+  'SELECT fingerprint, lyrics, bpm, key, scale, genre FROM analysis_cache WHERE path = ? AND size = ? AND mtime = ?'
 );
 const cacheSetStmt = cacheDb.prepare(`
-  INSERT INTO analysis_cache (path, size, mtime, fingerprint, lyrics, bpm, key, scale, updated_at)
-  VALUES (@path, @size, @mtime, @fingerprint, @lyrics, @bpm, @key, @scale, @updatedAt)
+  INSERT INTO analysis_cache (path, size, mtime, fingerprint, lyrics, bpm, key, scale, genre, updated_at)
+  VALUES (@path, @size, @mtime, @fingerprint, @lyrics, @bpm, @key, @scale, @genre, @updatedAt)
   ON CONFLICT(path, size, mtime) DO UPDATE SET
     fingerprint = COALESCE(excluded.fingerprint, analysis_cache.fingerprint),
     lyrics = COALESCE(excluded.lyrics, analysis_cache.lyrics),
     bpm = COALESCE(excluded.bpm, analysis_cache.bpm),
     key = COALESCE(excluded.key, analysis_cache.key),
     scale = COALESCE(excluded.scale, analysis_cache.scale),
+    genre = COALESCE(excluded.genre, analysis_cache.genre),
     updated_at = excluded.updated_at
 `);
 
 export function getCachedAnalysis(file) {
   try {
-    return cacheGetStmt.get(file.path, file.size, file.mtime) || null;
+    const row = cacheGetStmt.get(file.path, file.size, file.mtime) || null;
+    if (row && row.genre) {
+      try { row.genre = JSON.parse(row.genre); } catch { row.genre = null; }
+    }
+    return row;
   } catch {
     return null;
   }
 }
 
-export function setCachedAnalysis(file, { fingerprint, lyrics, bpm, key, scale }) {
+export function setCachedAnalysis(file, { fingerprint, lyrics, bpm, key, scale, genre }) {
   try {
     cacheSetStmt.run({
       path: file.path,
@@ -59,6 +64,7 @@ export function setCachedAnalysis(file, { fingerprint, lyrics, bpm, key, scale }
       bpm: bpm ?? null,
       key: key ?? null,
       scale: scale ?? null,
+      genre: genre ? JSON.stringify(genre) : null,
       updatedAt: new Date().toISOString()
     });
   } catch (err) {

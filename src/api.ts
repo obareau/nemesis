@@ -17,6 +17,7 @@ export interface File {
   key?: string;
   scale?: string;
   pushedToNavidrome?: boolean;
+  genre?: string; // style réel détecté par le classifieur audio Essentia (Discogs 400 classes), pas déduit du mood
   moods?: string[];
   playCount?: number;
 }
@@ -339,4 +340,20 @@ export function browse(targetPath: string) {
 
 export function browseShortcuts() {
   return fetch(`${API}/browse/shortcuts`);
+}
+
+export interface NavidromeSong {
+  id: string;
+  title: string;
+  artist?: string;
+  relPath: string | null;
+  path: string | null;
+  size?: number;
+  bitRate?: number;
+}
+
+// Catalogue complet Navidrome (pas limité au projet Curation ouvert) — sert de source
+// pour traiter en masse des morceaux déjà importés (style, renommage, tags, playlists).
+export function getNavidromeLibrary() {
+  return fetch(`${API}/navidrome/library`);
 }

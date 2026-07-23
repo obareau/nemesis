@@ -2,11 +2,23 @@ import express from 'express';
 import path from 'path';
 import { NAVIDROME_LIBRARY_ROOT } from '../config.js';
 import { analysisState } from '../store.js';
-import { subsonicGet } from '../navidrome.js';
+import { subsonicGet, listAllSongs } from '../navidrome.js';
 import { pushProgress, pushFilesToNavidrome } from '../navidromePush.js';
 import { autoProcessProgress, autoProcessAndPush } from '../autoProcess.js';
 
 const router = express.Router();
+
+// API: catalogue complet Navidrome (titre/artiste/chemin réel) — permet de cibler le
+// traitement en masse (auto-push) sur TOUTE la bibliothèque déjà importée, pas
+// seulement les fichiers d'un projet Curation actuellement ouvert (scan de dossier).
+router.get('/api/navidrome/library', async (req, res) => {
+  try {
+    const songs = await listAllSongs();
+    res.json({ songs });
+  } catch (err) {
+    res.status(500).json({ error: `Lecture catalogue Navidrome échouée : ${err.message}` });
+  }
+});
 
 // API: Progression du push Navidrome en cours (polling)
 router.get('/api/navidrome/push-progress', (req, res) => {

@@ -24,7 +24,10 @@ function probeFormatTags(filePath) {
         const tags = JSON.parse(out).format?.tags || {};
         const lower = {};
         for (const [k, v] of Object.entries(tags)) lower[k.toLowerCase()] = v;
-        resolve({ artist: lower.artist || '', title: lower.title || '', bpm: lower.bpm || '', initialKey: lower.initialkey || '' });
+        resolve({
+          artist: lower.artist || '', title: lower.title || '', bpm: lower.bpm || '',
+          initialKey: lower.initialkey || '', genre: lower.genre || ''
+        });
       } catch {
         resolve({});
       }
@@ -36,7 +39,7 @@ export async function readTags(filePath) {
   if (isMp3(filePath)) {
     try {
       const t = NodeID3.read(filePath);
-      return { artist: t.artist || '', title: t.title || '', bpm: t.bpm || '', initialKey: t.initialKey || '' };
+      return { artist: t.artist || '', title: t.title || '', bpm: t.bpm || '', initialKey: t.initialKey || '', genre: t.genre || '' };
     } catch {
       return {};
     }
@@ -58,6 +61,7 @@ export async function writeTags(filePath, tags) {
     if (tags.title !== undefined) out.title = tags.title;
     if (tags.bpm !== undefined) out.bpm = String(tags.bpm);
     if (tags.initialKey !== undefined) out.initialKey = tags.initialKey;
+    if (tags.genre !== undefined) out.genre = tags.genre;
     NodeID3.update(out, filePath);
     return;
   }
@@ -67,6 +71,7 @@ export async function writeTags(filePath, tags) {
   if (tags.title !== undefined) meta.TITLE = tags.title;
   if (tags.bpm !== undefined) meta.BPM = String(tags.bpm);
   if (tags.initialKey !== undefined) meta.INITIALKEY = tags.initialKey;
+  if (tags.genre !== undefined) meta.GENRE = tags.genre;
 
   const tempPath = path.join(path.dirname(filePath), `.nemesis-tag-${Date.now()}${path.extname(filePath)}`);
   const args = ['-y', '-i', filePath, '-map', '0', '-codec', 'copy'];

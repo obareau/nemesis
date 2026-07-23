@@ -48,6 +48,11 @@ fs.mkdirSync(INBOX_DIR, { recursive: true });
 export const WHISPER_PYTHON = path.join(__dirname, 'whisper-venv', 'bin', 'python');
 export const ESSENTIA_PYTHON = process.env.ESSENTIA_PYTHON || '/home/olivier/essentia-venv/bin/python3';
 export const ANALYZE_AUDIO_SCRIPT = path.join(__dirname, 'analyze_audio.py');
+// Venv séparé (essentia-tensorflow, ~278 Mo) — la venv essentia-venv "standard" n'a pas
+// TensorFlow et ne sait pas exécuter TensorflowPredictEffnetDiscogs. Modèles (discogs-effnet
+// + genre_discogs400, 400 classes genre---style Discogs) dans essentia-tf-venv/models/.
+export const ESSENTIA_TF_PYTHON = process.env.ESSENTIA_TF_PYTHON || '/home/olivier/essentia-tf-venv/bin/python3';
+export const ANALYZE_GENRE_SCRIPT = path.join(__dirname, 'analyze_genre.py');
 export const TRANSCRIBE_SCRIPT = path.join(__dirname, 'transcribe.py');
 export const FFMPEG_BIN = process.env.FFMPEG_BIN || 'ffmpeg';
 export const FFPROBE_BIN = process.env.FFPROBE_BIN || 'ffprobe';

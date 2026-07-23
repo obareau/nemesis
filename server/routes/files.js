@@ -1,7 +1,7 @@
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
-import { OLLAMA_URL, OLLAMA_MODEL, EDITS_BACKUP_DIR } from '../config.js';
+import { EDITS_BACKUP_DIR } from '../config.js';
 import {
   analysisState, actionLog, persistProject, applyAudioFeatures, applyLyrics
 } from '../store.js';
@@ -10,7 +10,7 @@ import { analyzeAudioFeatures, transcribeLyrics, probeDuration, probeBitrate, ru
 import { safeMoveSync } from '../fsUtils.js';
 import { readTags, writeTags, audioCodecArgsFor } from '../tagging.js';
 import { findExistingAuthor, recordAuthor } from '../title-authors.js';
-import { generateTitleFromLyrics, generateMoodFromSignals } from '../ollamaGen.js';
+import { generateTitleFromLyrics, generateMoodFromSignals, generateAuthorForTrack } from '../ollamaGen.js';
 
 const router = express.Router();
 
@@ -320,43 +320,10 @@ router.post('/api/generate-author', express.json(), async (req, res) => {
     return res.json({ author: existingAuthor, reused: true });
   }
 
-  const sample = trackNames.slice(0, 8).join(', ') || 'morceaux électroniques';
-  const prompt = `Tu es un générateur de noms d'artistes fictifs pour une radio IA underground.
-Ambiance/mood : ${mood || 'inconnu'}
-Morceaux concernés : ${sample}
-
-Génère UN SEUL nom d'artiste fictif, créatif et mystérieux, en 1 à 4 mots (pas de ponctuation superflue, pas d'explication).
-Réponds uniquement au format JSON strict : {"author": "..."}`;
-
   try {
-    const response = await fetch(`${OLLAMA_URL}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: OLLAMA_MODEL,
-        prompt,
-        stream: false,
-        format: 'json'
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error(`Ollama a répondu ${response.status}`);
-    }
-
-    const data = await response.json();
-    let author;
-    try {
-      author = JSON.parse(data.response).author;
-    } catch {
-      // Fallback si le modèle n'a pas respecté le JSON strict
-      author = data.response.replace(/[{}"]/g, '').replace(/author:?/i, '').trim();
-    }
-
-    if (!author) throw new Error('Réponse Ollama vide ou invalide');
-
-    recordAuthor(trackNames, author.trim());
-    res.json({ author: author.trim() });
+    const author = await generateAuthorForTrack(trackNames, mood);
+    recordAuthor(trackNames, author);
+    res.json({ author });
   } catch (err) {
     res.status(500).json({ error: `Génération échouée : ${err.message}` });
   }

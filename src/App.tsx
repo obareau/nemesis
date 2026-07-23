@@ -17,6 +17,7 @@ import { formatTime, getLyricsState } from './format';
 import { moodColor } from './moods';
 import { SurpriseModal } from './components/SurpriseModal';
 import { ImportPanel } from './components/ImportPanel';
+import { LibraryPanel } from './components/LibraryPanel';
 import { NavidromeDedupModal } from './components/NavidromeDedupModal';
 import { InfoPanelModal } from './components/InfoPanelModal';
 import { WaveformEditorModal } from './components/WaveformEditorModal';
@@ -125,7 +126,7 @@ function App() {
   const [reviewActive, setReviewActive] = useState(false);
   // Onglet actif : Import (flux quotidien simple, atterrissage) ou Curation (l'écran
   // complet historique — doublons, notes, renommage, quarantaine).
-  const [activeTab, setActiveTab] = useState<'import' | 'curation'>('import');
+  const [activeTab, setActiveTab] = useState<'import' | 'curation' | 'library'>('import');
   const [openMood, setOpenMood] = useState<string | null>(null);
   const [moodPanelTracks, setMoodPanelTracks] = useState<MoodTrack[]>([]);
   const [moodPanelLoading, setMoodPanelLoading] = useState(false);
@@ -1885,6 +1886,13 @@ function App() {
           >
             ⚖️ Curation
           </button>
+          <button
+            className={`tab-btn ${activeTab === 'library' ? 'active' : ''}`}
+            onClick={() => setActiveTab('library')}
+            title="Catalogue Navidrome complet — traiter en masse des morceaux déjà importés, pas seulement le dossier ouvert"
+          >
+            🗄️ Bibliothèque
+          </button>
         </nav>
 
         <div className="progress-section">
@@ -2005,8 +2013,9 @@ function App() {
       </header>
 
       {activeTab === 'import' && <ImportPanel availableMoods={availableMoods} />}
+      {activeTab === 'library' && <LibraryPanel />}
 
-      <div className="main-content" style={activeTab === 'import' ? { display: 'none' } : undefined}>
+      <div className="main-content" style={activeTab === 'curation' ? undefined : { display: 'none' }}>
         {/* LEFT PANEL */}
         <aside className="left-panel">
           <section className="panel-section">
@@ -2191,10 +2200,12 @@ function App() {
             <div className="rename-options">
               <p>
                 Contrairement au renommage ci-dessus (un auteur/mood partagé pour tout le
-                groupe), ici chaque fichier sélectionné obtient son propre titre (depuis
-                ses propres paroles) et ses propres moods (paroles + BPM/tonalité), puis
-                est envoyé vers sa propre playlist Navidrome — pour un lot de morceaux
-                indépendants, pas encore triés un par un.
+                groupe), ici chaque fichier sélectionné est traité indépendamment : titre
+                (depuis ses propres paroles), style réel détecté dans l&apos;audio (Essentia,
+                pas déduit du nom de fichier), artiste fictif (réutilisé si ce titre a déjà
+                été vu), renommage physique + tags ID3, puis envoi vers sa propre playlist
+                Navidrome (moods + le style) — pour un lot de morceaux indépendants, pas
+                encore triés un par un.
               </p>
               <button
                 className="rename-btn"
@@ -2387,6 +2398,7 @@ function App() {
                 <span className="col-rename" />
                 <span className="col-navidrome" />
                 <span className="col-moods">Mood</span>
+                <span className="col-genre">Style</span>
                 <span className="col-lyrics-state" />
                 <button className="col-plays col-sortable" onClick={() => toggleSort('plays')} title="Nombre d'écoutes">
                   ▶ {sortKey === 'plays' && (sortDir === 'asc' ? '▲' : '▼')}
@@ -2472,6 +2484,12 @@ function App() {
                       {file.moods?.map(m => (
                         <span key={m} className="mood-dot-mini" style={{ background: moodColor(m) }} />
                       ))}
+                    </span>
+                    <span
+                      className="col-genre"
+                      title={file.genre ? `Style détecté (Essentia) : ${file.genre}` : 'Style non détecté'}
+                    >
+                      {file.genre && <span className="genre-badge">{file.genre}</span>}
                     </span>
                     <button
                       className={`col-lyrics-state state-${lyricsState}`}

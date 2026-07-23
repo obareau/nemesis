@@ -1,10 +1,24 @@
+import fs from 'fs';
 import path from 'path';
-import { analysisState, applyAudioFeatures, applyLyrics, applyTitle } from './store.js';
+import {
+  analysisState, applyAudioFeatures, applyLyrics, applyTitle, applyGenre, applyRename,
+  actionLog, persistProject
+} from './store.js';
 import { getCachedAnalysis, setCachedAnalysis } from './cache.js';
-import { analyzeAudioFeatures, transcribeLyrics } from './analysis.js';
-import { writeTags } from './tagging.js';
-import { generateTitleFromLyrics, generateMoodFromSignals } from './ollamaGen.js';
+import { analyzeAudioFeatures, transcribeLyrics, analyzeGenre } from './analysis.js';
+import { readTags, writeTags } from './tagging.js';
+import { safeMoveSync } from './fsUtils.js';
+import { findExistingAuthor, recordAuthor } from './title-authors.js';
+import { generateTitleFromLyrics, generateMoodFromSignals, generateAuthorForTrack } from './ollamaGen.js';
 import { pushItemsToNavidrome } from './navidromePush.js';
+
+// Style Discogs ("Electronic---Techno") → juste la partie style, plus lisible
+// comme genre ID3/nom de playlist qu'un couple genre---style complet.
+function shortGenreLabel(topStyle) {
+  if (!topStyle?.label) return null;
+  const parts = topStyle.label.split('---');
+  return parts[parts.length - 1];
+}
 
 // Progression du traitement en masse — même pattern que pushProgress (un seul
 // traitement actif à la fois, suivi par polling côté frontend).
@@ -18,33 +32,60 @@ export const autoProcessProgress = { active: false, done: 0, total: 0, currentFi
 //
 // Par fichier : BPM/tonalité (cache ou analyse) → paroles (état, cache, ou
 // transcription — non bloquant, un instrumental n'a simplement pas de
-// paroles) → titre généré depuis les paroles (si présentes, tag écrit) →
-// mood(s) générés depuis paroles+bpm/tonalité (au moins un signal requis).
+// paroles) → titre généré depuis les paroles (si présentes) → mood(s)
+// générés depuis paroles+bpm/tonalité → style réel via Essentia (contenu
+// audio, pas le nom de fichier) → artiste fictif (réutilisé si ce nom de
+// fichier a déjà été vu ailleurs, sinon généré) → renommage physique
+// "{artiste} - {titre}" + tags ID3 (artiste/titre/genre) → playlist(s)
+// Navidrome (moods + le style comme playlist supplémentaire).
 // Le push Navidrome se fait en UN SEUL appel groupé à la fin (un seul rescan
 // bibliothèque pour tout le lot, pas un par fichier).
 export async function autoProcessAndPush(filePaths) {
   Object.assign(autoProcessProgress, { active: true, done: 0, total: filePaths.length, currentFile: null, stage: 'analyze' });
   const processed = [];
   const pushItems = [];
+  const renames = [];
 
   try {
-    for (const filePath of filePaths) {
-      const fileName = path.basename(filePath);
-      autoProcessProgress.currentFile = fileName;
-      const fileEntry = analysisState.files.find((f) => f.path === filePath);
+    for (const originalPath of filePaths) {
+      const originalName = path.basename(originalPath);
+      autoProcessProgress.currentFile = originalName;
+      const fileEntry = analysisState.files.find((f) => f.path === originalPath);
+      let filePath = originalPath;
+
+      // Clé de cache (path+size+mtime) : un fileEntry du projet Curation ouvert
+      // si dispo, sinon reconstruite depuis le disque — permet d'appliquer tout
+      // le pipeline à N'IMPORTE QUEL fichier (toute la bibliothèque Navidrome,
+      // pas seulement les fichiers d'un projet Curation actuellement ouvert).
+      // Les applyXxx(store.js) restent des no-op silencieux si le fichier n'est
+      // pas dans analysisState — seul le cache SQLite (par path/size/mtime) sert
+      // alors de mémoire d'une exécution à l'autre.
+      let cacheRef = fileEntry;
+      if (!cacheRef) {
+        try {
+          const stat = fs.statSync(filePath);
+          cacheRef = { path: filePath, size: stat.size, mtime: stat.mtimeMs };
+        } catch {
+          cacheRef = null;
+        }
+      }
 
       try {
+        // Snapshot des tags d'origine — nécessaire pour un éventuel undo du
+        // renommage (même mécanisme générique que /api/rename-bulk).
+        const oldTags = await readTags(filePath).catch(() => null);
+
         // BPM/tonalité — depuis l'état/cache, ou analysées si jamais fait.
         autoProcessProgress.stage = 'analyze';
         let bpm = fileEntry?.bpm, key = fileEntry?.key, scale = fileEntry?.scale;
-        if (!bpm && fileEntry) {
-          const cached = getCachedAnalysis(fileEntry);
+        if (!bpm && cacheRef) {
+          const cached = getCachedAnalysis(cacheRef);
           if (cached?.bpm) {
             ({ bpm, key, scale } = cached);
           } else {
             const result = await analyzeAudioFeatures(filePath);
             if (result) {
-              setCachedAnalysis(fileEntry, result);
+              setCachedAnalysis(cacheRef, result);
               ({ bpm, key, scale } = result);
             }
           }
@@ -56,8 +97,8 @@ export async function autoProcessAndPush(filePaths) {
         // laisse juste le titre et le mood retomber sur les autres signaux.
         autoProcessProgress.stage = 'lyrics';
         let lyrics = fileEntry?.lyrics || '';
-        if (!lyrics && fileEntry) {
-          const cached = getCachedAnalysis(fileEntry);
+        if (!lyrics && cacheRef) {
+          const cached = getCachedAnalysis(cacheRef);
           if (cached?.lyrics) {
             lyrics = cached.lyrics;
             applyLyrics(filePath, lyrics);
@@ -68,7 +109,7 @@ export async function autoProcessAndPush(filePaths) {
               // toujours normaliser en chaîne vide, jamais laisser passer null.
               lyrics = (await transcribeLyrics(filePath)) || '';
               if (lyrics) {
-                setCachedAnalysis(fileEntry, { lyrics });
+                setCachedAnalysis(cacheRef, { lyrics });
                 applyLyrics(filePath, lyrics);
               }
             } catch {
@@ -83,7 +124,6 @@ export async function autoProcessAndPush(filePaths) {
         if (lyrics && lyrics.trim()) {
           try {
             title = await generateTitleFromLyrics(lyrics);
-            await writeTags(filePath, { title });
             applyTitle(filePath, title);
           } catch {
             title = null; // Ollama down ou réponse invalide — le fichier garde son titre existant
@@ -94,13 +134,87 @@ export async function autoProcessAndPush(filePaths) {
         autoProcessProgress.stage = 'mood';
         const moods = await generateMoodFromSignals({ lyrics, bpm, key, scale });
 
-        pushItems.push({ filePath, moods });
-        processed.push({ file: fileName, filePath, success: true, title, moods });
+        // Style réel (contenu audio) — Essentia/Discogs-Effnet, jamais déduit
+        // du nom de fichier ou du BPM. Non bloquant : un échec laisse juste
+        // le fichier sans genre ID3 ni playlist de style.
+        autoProcessProgress.stage = 'genre';
+        let genre = null;
+        if (cacheRef) {
+          const cached = getCachedAnalysis(cacheRef);
+          let styles = cached?.genre || null;
+          if (!styles) {
+            styles = await analyzeGenre(filePath);
+            if (styles) setCachedAnalysis(cacheRef, { genre: styles });
+          }
+          genre = shortGenreLabel(styles?.[0]);
+          if (genre) applyGenre(filePath, genre);
+        }
+
+        // Artiste fictif — réutilisé si ce nom de fichier a déjà été vu
+        // ailleurs (title-authors.js), sinon généré et mémorisé AVANT le
+        // renommage (sur le nom d'origine, comme /api/rename-bulk).
+        autoProcessProgress.stage = 'author';
+        let author = findExistingAuthor([originalName]);
+        let authorReused = !!author;
+        if (!author) {
+          try {
+            author = await generateAuthorForTrack([originalName], moods.join(', ') || genre || '');
+            recordAuthor([originalName], author);
+          } catch {
+            author = null; // Ollama down — pas de renommage possible sans artiste
+          }
+        }
+
+        // Tags ID3 (artiste/titre/genre) puis renommage physique
+        // "{artiste} - {titre}" — même schéma que /api/rename-bulk (suffixe
+        // numérique si collision), pour que Nemesis normalise vraiment le nom
+        // de fichier au lieu de se contenter de tags sur un nom en leetspeak.
+        autoProcessProgress.stage = 'rename';
+        if (author) {
+          const tags = { artist: author };
+          if (title) tags.title = title;
+          if (genre) tags.genre = genre;
+          await writeTags(filePath, tags);
+
+          const dir = path.dirname(filePath);
+          const ext = path.extname(filePath);
+          const prefix = title ? `${author} - ${title}` : author;
+          let newName = `${prefix}${ext}`;
+          let newPath = path.join(dir, newName);
+          let n = 2;
+          while (newPath !== filePath && fs.existsSync(newPath)) {
+            newName = `${prefix} (${n})${ext}`;
+            newPath = path.join(dir, newName);
+            n++;
+          }
+
+          if (newPath !== filePath) {
+            safeMoveSync(filePath, newPath);
+            applyRename(filePath, newPath, newName);
+            renames.push({ oldPath: filePath, newPath, oldTags });
+            filePath = newPath;
+          }
+        }
+
+        const pushMoods = genre ? [...moods, genre] : moods;
+        pushItems.push({ filePath, moods: pushMoods });
+        processed.push({ file: originalName, filePath, success: true, title, author, authorReused, genre, moods });
       } catch (err) {
-        processed.push({ file: fileName, filePath, success: false, error: err.message });
+        processed.push({ file: originalName, filePath, success: false, error: err.message });
       } finally {
         autoProcessProgress.done++;
       }
+    }
+
+    if (renames.length > 0) {
+      actionLog.push({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        type: 'rename',
+        timestamp: new Date().toISOString(),
+        description: `${renames.length} fichier(s) renommé(s) (traitement en masse)`,
+        data: { renames }
+      });
+      persistProject();
     }
 
     autoProcessProgress.stage = 'push';

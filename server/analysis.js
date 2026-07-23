@@ -2,7 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
 import {
-  FFMPEG_BIN, FFPROBE_BIN, WHISPER_PYTHON, TRANSCRIBE_SCRIPT, ESSENTIA_PYTHON, ANALYZE_AUDIO_SCRIPT
+  FFMPEG_BIN, FFPROBE_BIN, WHISPER_PYTHON, TRANSCRIBE_SCRIPT, ESSENTIA_PYTHON, ANALYZE_AUDIO_SCRIPT,
+  ESSENTIA_TF_PYTHON, ANALYZE_GENRE_SCRIPT
 } from './config.js';
 
 export function probeDuration(filePath) {
@@ -302,6 +303,45 @@ export function analyzeAudioFeatures(filePath) {
         const parsed = JSON.parse(output.trim().split('\n').pop());
         if (parsed.error) { resolve(null); return; }
         resolve({ bpm: parsed.bpm, key: parsed.key, scale: parsed.scale });
+      } catch {
+        resolve(null);
+      }
+    });
+  });
+}
+
+// Style réel (contenu audio, pas le nom de fichier/BPM) via le classifieur Discogs-Effnet
+// (400 classes genre---style) — ~4-5s/fichier sur CPU, donc calculé à la demande comme
+// analyzeAudioFeatures, jamais pendant le scan en masse.
+export function analyzeGenre(filePath, topN = 3) {
+  return new Promise((resolve) => {
+    let proc;
+    try {
+      proc = spawn(ESSENTIA_TF_PYTHON, [ANALYZE_GENRE_SCRIPT, filePath, String(topN)]);
+    } catch {
+      resolve(null);
+      return;
+    }
+
+    let output = '';
+    const timeout = setTimeout(() => {
+      proc.kill();
+      resolve(null);
+    }, 45000);
+
+    proc.on('error', () => {
+      clearTimeout(timeout);
+      resolve(null);
+    });
+
+    proc.stdout.on('data', (data) => { output += data.toString(); });
+
+    proc.on('close', () => {
+      clearTimeout(timeout);
+      try {
+        const parsed = JSON.parse(output.trim().split('\n').pop());
+        if (parsed.error || !Array.isArray(parsed.styles) || parsed.styles.length === 0) { resolve(null); return; }
+        resolve(parsed.styles);
       } catch {
         resolve(null);
       }

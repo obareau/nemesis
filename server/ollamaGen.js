@@ -35,6 +35,26 @@ Réponds uniquement au format JSON strict : {"title": "..."}`;
   return title.trim();
 }
 
+export async function generateAuthorForTrack(trackNames = [], mood = '') {
+  const sample = trackNames.slice(0, 8).join(', ') || 'morceaux électroniques';
+  const prompt = `Tu es un générateur de noms d'artistes fictifs pour une radio IA underground.
+Ambiance/mood : ${mood || 'inconnu'}
+Morceaux concernés : ${sample}
+
+Génère UN SEUL nom d'artiste fictif, créatif et mystérieux, en 1 à 4 mots (pas de ponctuation superflue, pas d'explication).
+Réponds uniquement au format JSON strict : {"author": "..."}`;
+
+  const data = await ollamaJson(prompt);
+  let author;
+  try {
+    author = JSON.parse(data.response).author;
+  } catch {
+    author = data.response.replace(/[{}"]/g, '').replace(/author:?/i, '').trim();
+  }
+  if (!author) throw new Error('Réponse Ollama vide ou invalide');
+  return author.trim();
+}
+
 export async function generateMoodFromSignals({ lyrics = '', bpm, key, scale }) {
   if (!lyrics.trim() && !bpm) throw new Error('lyrics ou bpm/tonalité requis (aucun signal disponible pour ce fichier)');
 

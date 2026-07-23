@@ -134,3 +134,14 @@ export function applyTitle(filePath, title) {
 export function applyBitrate(filePath, bitrate) {
   applyToFile(filePath, (f) => { f.bitrate = bitrate; });
 }
+
+export function applyGenre(filePath, genre) {
+  applyToFile(filePath, (f) => { f.genre = genre; });
+}
+
+// Contrairement aux autres applyXxx, la clé de correspondance (path) change —
+// doit être appelé avec l'ANCIEN chemin, avant que le fichier ne soit déplacé
+// sur disque, pour retrouver l'entrée à muter.
+export function applyRename(oldPath, newPath, newName) {
+  applyToFile(oldPath, (f) => { f.path = newPath; f.name = newName; });
+}
