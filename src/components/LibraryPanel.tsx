@@ -71,8 +71,8 @@ export function LibraryPanel() {
     );
   };
 
-  const process = async () => {
-    const targets = [...selected];
+  const process = async (explicitTargets?: string[]) => {
+    const targets = explicitTargets ?? [...selected];
     if (targets.length === 0 || processing) return;
 
     setProcessing(true);
@@ -168,18 +168,28 @@ export function LibraryPanel() {
       )}
 
       <div className="import-footer">
-        <button
-          className="import-send-btn"
-          onClick={process}
-          disabled={selected.size === 0 || processing}
-          title="Style réel, artiste fictif, renommage + tags, playlists — un fichier à la fois"
-        >
-          {processing
-            ? progress
-              ? `${progress.stage ?? 'Traitement'}… ${progress.done}/${progress.total}${progress.currentFile ? ` — ${progress.currentFile}` : ''}`
-              : 'Traitement…'
-            : `Traiter la sélection (${selected.size})`}
-        </button>
+        <div className="library-actions">
+          <button
+            className="import-send-btn"
+            onClick={() => process()}
+            disabled={selected.size === 0 || processing}
+            title="Style réel, artiste fictif, renommage + tags, playlists — un fichier à la fois"
+          >
+            {processing
+              ? progress
+                ? `${progress.stage ?? 'Traitement'}… ${progress.done}/${progress.total}${progress.currentFile ? ` — ${progress.currentFile}` : ''}`
+                : 'Traitement…'
+              : `Traiter la sélection (${selected.size})`}
+          </button>
+          <button
+            className="import-send-btn library-process-all-btn"
+            onClick={() => process(songs.map(s => s.path as string))}
+            disabled={songs.length === 0 || processing}
+            title="Reanalyse + renomme + réimporte TOUTE la bibliothèque en un clic, sans rien cocher — peut prendre longtemps (BPM/paroles/style par fichier)"
+          >
+            {processing ? '…' : `Traiter TOUTE la bibliothèque (${songs.length})`}
+          </button>
+        </div>
 
         {processing && (
           <div className="import-batch-progress">

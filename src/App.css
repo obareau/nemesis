@@ -572,6 +572,22 @@ button, input, select {
   margin: 0;
 }
 
+.library-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.library-process-all-btn {
+  background: var(--bg-input);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+.library-process-all-btn:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--bg-app);
+}
+
 .import-suggested {
   flex-basis: 100%;
   display: flex;
