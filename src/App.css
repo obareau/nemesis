@@ -661,6 +661,49 @@ button, input, select {
 }
 .stage-step.stage-pending { opacity: 0.5; }
 
+.proc-log {
+  margin-top: 10px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  padding: 8px 10px;
+}
+.proc-log-title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-faint);
+  margin-bottom: 6px;
+}
+.proc-log-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 0;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+.proc-log-row:first-of-type { border-top: none; }
+.proc-log-names { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1; }
+.proc-log-old { color: var(--text-faint); text-decoration: line-through; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
+.proc-log-arrow { color: var(--accent); flex-shrink: 0; }
+.proc-log-new { color: var(--fg-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.proc-log-status { flex-shrink: 0; }
+.proc-badge {
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  padding: 2px 7px;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+.badge-ok { color: var(--success); border: 1px solid var(--success); background: rgba(46, 160, 67, 0.1); }
+.badge-pending { color: var(--accent); border: 1px solid var(--accent); background: rgba(224, 168, 56, 0.1); }
+.badge-fail { color: var(--error); border: 1px solid var(--error); background: rgba(220, 60, 60, 0.1); }
+
 .library-actions {
   display: flex;
   gap: 10px;

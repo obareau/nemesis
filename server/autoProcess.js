@@ -34,7 +34,16 @@ function fallbackMood(bpm) {
 
 // Progression du traitement en masse — même pattern que pushProgress (un seul
 // traitement actif à la fois, suivi par polling côté frontend).
-export const autoProcessProgress = { active: false, done: 0, total: 0, currentFile: null, stage: null };
+// recent = journal roulant des derniers fichiers traités (le plus récent en tête),
+// pour une fenêtre de log en direct côté frontend SANS recharger toute la liste.
+// pushed: null tant que le push Navidrome final n'a pas eu lieu, puis true/false.
+export const autoProcessProgress = { active: false, done: 0, total: 0, currentFile: null, stage: null, recent: [] };
+const RECENT_MAX = 8;
+
+function logRecent(entry) {
+  autoProcessProgress.recent.unshift(entry);
+  autoProcessProgress.recent = autoProcessProgress.recent.slice(0, RECENT_MAX);
+}
 
 // Traite chaque fichier INDÉPENDAMMENT — contrairement à /api/navidrome/push
 // qui applique le même mood à tout le lot (le cas d'un groupe de doublons
@@ -53,7 +62,7 @@ export const autoProcessProgress = { active: false, done: 0, total: 0, currentFi
 // Le push Navidrome se fait en UN SEUL appel groupé à la fin (un seul rescan
 // bibliothèque pour tout le lot, pas un par fichier).
 export async function autoProcessAndPush(filePaths) {
-  Object.assign(autoProcessProgress, { active: true, done: 0, total: filePaths.length, currentFile: null, stage: 'analyze' });
+  Object.assign(autoProcessProgress, { active: true, done: 0, total: filePaths.length, currentFile: null, stage: 'analyze', recent: [] });
   const processed = [];
   const pushItems = [];
   const renames = [];
@@ -223,8 +232,10 @@ export async function autoProcessAndPush(filePaths) {
         const pushMoods = genre ? [...moods, genre] : moods;
         pushItems.push({ filePath, moods: pushMoods });
         processed.push({ file: originalName, filePath, success: true, title, author, authorReused, genre, moods });
+        logRecent({ oldName: originalName, newName: path.basename(filePath), genre, moods, success: true, pushed: null });
       } catch (err) {
         processed.push({ file: originalName, filePath, success: false, error: err.message });
+        logRecent({ oldName: originalName, newName: null, success: false, error: err.message, pushed: false });
       } finally {
         autoProcessProgress.done++;
       }
@@ -246,8 +257,22 @@ export async function autoProcessAndPush(filePaths) {
       ? await pushItemsToNavidrome(pushItems)
       : { success: true, pushed: 0, failed: 0, results: [] };
 
+    // Reporte le statut Navidrome (push groupé à la fin) sur les entrées encore
+    // visibles dans le journal roulant — les derniers fichiers, justement ceux
+    // que l'utilisateur voit à l'écran, obtiennent leur ✓/✗ Navidrome.
+    const byName = new Map(pushResult.results.map(r => [path.basename(r.filePath || r.file || ''), r]));
+    for (const entry of autoProcessProgress.recent) {
+      if (entry.newName && byName.has(entry.newName)) {
+        const r = byName.get(entry.newName);
+        entry.pushed = !!r.success;
+        entry.alreadyInLibrary = !!r.alreadyInLibrary;
+      }
+    }
+
     return { processed, push: pushResult };
   } finally {
+    // On garde `recent` intact après la fin : la fenêtre de log reste lisible
+    // une fois le traitement terminé, jusqu'au prochain lancement.
     Object.assign(autoProcessProgress, { active: false, done: 0, total: 0, currentFile: null, stage: null });
   }
 }

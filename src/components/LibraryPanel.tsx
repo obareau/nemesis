@@ -6,6 +6,18 @@ import { WarnIcon, CheckIcon } from '../icons';
 
 type SortKey = 'title' | 'artist' | 'genre' | 'bpm' | 'key' | 'size' | 'original';
 
+// Une ligne du journal roulant (miroir de autoProcessProgress.recent, autoProcess.js).
+interface RecentEntry {
+  oldName: string;
+  newName: string | null;
+  genre?: string | null;
+  moods?: string[];
+  success: boolean;
+  error?: string;
+  pushed: boolean | null; // null = push Navidrome pas encore fait
+  alreadyInLibrary?: boolean;
+}
+
 // Étapes du pipeline par fichier (miroir des autoProcessProgress.stage côté serveur,
 // autoProcess.js). 'push' est l'étape finale unique pour tout le lot, pas par fichier.
 const PIPELINE_STAGES: { key: string; label: string }[] = [
@@ -43,7 +55,8 @@ export function LibraryPanel() {
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [processing, setProcessing] = useState(false);
-  const [progress, setProgress] = useState<{ done: number; total: number; currentFile: string | null; stage: string | null } | null>(null);
+  const [progress, setProgress] = useState<{ done: number; total: number; currentFile: string | null; stage: string | null; recent?: RecentEntry[] } | null>(null);
+  const [log, setLog] = useState<RecentEntry[]>([]);
   const [result, setResult] = useState<AutoProcessResult | null>(null);
   const [resultError, setResultError] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
@@ -122,11 +135,15 @@ export function LibraryPanel() {
     setProcessing(true);
     setResult(null);
     setResultError(null);
+    setLog([]);
     const interval = setInterval(async () => {
       try {
         const res = await api.getAutoPushProgress();
         const data = await res.json();
         setProgress(data.active ? data : null);
+        // Le journal roulant vient du backend (recent) — on le garde à jour même
+        // après la fin du batch, pour que la fenêtre de log reste lisible.
+        if (Array.isArray(data.recent)) setLog(data.recent);
       } catch { /* sondage best-effort */ }
     }, 400);
 
@@ -136,7 +153,14 @@ export function LibraryPanel() {
       if (!res.ok) throw new Error(data.error || 'Échec traitement en masse');
       setResult(data);
       setSelected(new Set());
-      loadLibrary();
+      // Volontairement PAS de loadLibrary() ici : recharger 1000+ lignes en plein
+      // écran est brutal. La fenêtre de log dit ce qui a été fait ; l'utilisateur
+      // clique "Rafraîchir" quand il veut réactualiser la liste complète.
+      // Dernier état du journal (statuts Navidrome inclus) après le push final.
+      try {
+        const p = await (await api.getAutoPushProgress()).json();
+        if (Array.isArray(p.recent)) setLog(p.recent);
+      } catch { /* best-effort */ }
     } catch (err) {
       setResultError(String(err instanceof Error ? err.message : err));
     } finally {
@@ -284,6 +308,32 @@ export function LibraryPanel() {
                 ? `${progress.done}/${progress.total} morceaux${progress.currentFile ? ` — ${progress.currentFile}` : ''}`
                 : 'Démarrage…'}
             </div>
+          </div>
+        )}
+
+        {log.length > 0 && (
+          <div className="proc-log">
+            <div className="proc-log-title">Derniers fichiers traités</div>
+            {log.slice(0, 5).map((e, i) => (
+              <div key={`${e.oldName}-${i}`} className={`proc-log-row ${e.success ? '' : 'proc-log-fail'}`}>
+                <span className="proc-log-names">
+                  <span className="proc-log-old">{e.oldName}</span>
+                  {e.success && e.newName && <>
+                    <span className="proc-log-arrow">→</span>
+                    <span className="proc-log-new">{e.newName}</span>
+                  </>}
+                </span>
+                <span className="proc-log-status">
+                  {!e.success
+                    ? <span className="proc-badge badge-fail" title={e.error}>échec</span>
+                    : e.pushed === null
+                      ? <span className="proc-badge badge-pending">renommé · Navidrome…</span>
+                      : e.pushed
+                        ? <span className="proc-badge badge-ok">{e.alreadyInLibrary ? 'Navidrome ✓ (Covers)' : 'Navidrome ✓'}</span>
+                        : <span className="proc-badge badge-fail">Navidrome ✗</span>}
+                </span>
+              </div>
+            ))}
           </div>
         )}
 
