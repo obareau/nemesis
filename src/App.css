@@ -690,6 +690,24 @@ button, input, select {
 .proc-log-old { color: var(--text-faint); text-decoration: line-through; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
 .proc-log-arrow { color: var(--accent); flex-shrink: 0; }
 .proc-log-new { color: var(--fg-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.proc-log-tags { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.proc-log-style {
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.proc-log-nostyle {
+  font-size: 9.5px;
+  color: var(--error);
+  opacity: 0.8;
+}
 .proc-log-status { flex-shrink: 0; }
 .proc-badge {
   font-size: 9.5px;

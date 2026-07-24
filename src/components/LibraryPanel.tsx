@@ -323,6 +323,16 @@ export function LibraryPanel() {
                     <span className="proc-log-new">{e.newName}</span>
                   </>}
                 </span>
+                <span className="proc-log-tags">
+                  {e.genre
+                    ? <span className="proc-log-style" title="Style écrit dans le tag ID3 genre">{e.genre}</span>
+                    : <span className="proc-log-nostyle" title="Aucun style détecté (pas de tag genre écrit)">style ?</span>}
+                  {e.moods?.map(m => (
+                    <span key={m} className="mood-chip-tiny" style={{ borderColor: moodColor(m) }}>
+                      <span className="mood-dot-mini" style={{ background: moodColor(m) }} />{m}
+                    </span>
+                  ))}
+                </span>
                 <span className="proc-log-status">
                   {!e.success
                     ? <span className="proc-badge badge-fail" title={e.error}>échec</span>
