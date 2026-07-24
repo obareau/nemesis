@@ -16,6 +16,7 @@ interface RecentEntry {
   error?: string;
   pushed: boolean | null; // null = push Navidrome pas encore fait
   alreadyInLibrary?: boolean;
+  duplicate?: boolean; // doublon musical détecté par empreinte → Covers
 }
 
 // Étapes du pipeline par fichier (miroir des autoProcessProgress.stage côté serveur,
@@ -23,8 +24,9 @@ interface RecentEntry {
 const PIPELINE_STAGES: { key: string; label: string }[] = [
   { key: 'analyze', label: 'BPM' },
   { key: 'lyrics', label: 'Paroles' },
-  { key: 'genre', label: 'Style' },
-  { key: 'metadata', label: 'Titre/Mood/Artiste' },
+  { key: 'genre', label: 'Style/Mood' },
+  { key: 'fingerprint', label: 'Empreinte' },
+  { key: 'metadata', label: 'Titre/Artiste' },
   { key: 'rename', label: 'Renommage' },
   { key: 'push', label: 'Envoi' },
 ];
@@ -324,6 +326,7 @@ export function LibraryPanel() {
                   </>}
                 </span>
                 <span className="proc-log-tags">
+                  {e.duplicate && <span className="proc-badge badge-dup" title="Doublon musical (même empreinte) — envoyé en Covers, pas dans les playlists mood">doublon</span>}
                   {e.genre
                     ? <span className="proc-log-style" title="Style écrit dans le tag ID3 genre">{e.genre}</span>
                     : <span className="proc-log-nostyle" title="Aucun style détecté (pas de tag genre écrit)">style ?</span>}

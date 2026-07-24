@@ -721,6 +721,7 @@ button, input, select {
 .badge-ok { color: var(--success); border: 1px solid var(--success); background: rgba(46, 160, 67, 0.1); }
 .badge-pending { color: var(--accent); border: 1px solid var(--accent); background: rgba(224, 168, 56, 0.1); }
 .badge-fail { color: var(--error); border: 1px solid var(--error); background: rgba(220, 60, 60, 0.1); }
+.badge-dup { color: #b085f5; border: 1px solid #b085f5; background: rgba(176, 133, 245, 0.12); }
 
 .library-actions {
   display: flex;

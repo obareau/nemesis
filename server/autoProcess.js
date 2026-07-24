@@ -5,7 +5,7 @@ import {
   actionLog, persistProject
 } from './store.js';
 import { getCachedAnalysis, setCachedAnalysis } from './cache.js';
-import { analyzeAudioFeatures, transcribeLyrics, analyzeAudioContent } from './analysis.js';
+import { analyzeAudioFeatures, transcribeLyrics, analyzeAudioContent, getFingerprint, fingerprintSimilarity } from './analysis.js';
 import { mapAudioMoods } from './moodMap.js';
 import { readTags, writeTags } from './tagging.js';
 import { safeMoveSync } from './fsUtils.js';
@@ -62,11 +62,50 @@ function logRecent(entry) {
 // Navidrome (moods + le style comme playlist supplémentaire).
 // Le push Navidrome se fait en UN SEUL appel groupé à la fin (un seul rescan
 // bibliothèque pour tout le lot, pas un par fichier).
+// Taille des paquets de push : on pousse vers Navidrome tous les PUSH_CHUNK
+// fichiers renommés plutôt qu'en un seul bloc à la fin. Ainsi les morceaux passent
+// au vert "Navidrome ✓" en direct, et un arrêt en cours de route n'annule pas le
+// push des paquets déjà envoyés (résilience). Coût : un rescan Navidrome par
+// paquet — mais incrémental, donc rapide.
+const PUSH_CHUNK = 20;
+
 export async function autoProcessAndPush(filePaths) {
   Object.assign(autoProcessProgress, { active: true, done: 0, total: filePaths.length, currentFile: null, stage: 'analyze', recent: [] });
   const processed = [];
-  const pushItems = [];
   const renames = [];
+  const allPushResults = [];
+  let pushBatch = [];
+  // Registre des morceaux déjà vus dans ce lot, par empreinte audio (Chromaprint) :
+  // deux morceaux musicalement identiques ont une empreinte quasi identique, MÊME
+  // avec des titres différents. Le premier vu est le canonique ; tout doublon
+  // reprend son titre + artiste et part en Covers (Subwave ne le rejouera pas).
+  const seenTracks = []; // [{ fingerprint, title, author }]
+  const DUP_SIMILARITY = 92; // seuil Hamming (identique à la dédup Curation)
+
+  // Pousse le paquet courant vers Navidrome, met à jour le statut des entrées
+  // encore visibles dans le journal roulant (elles passent au vert), puis vide
+  // le paquet. Non bloquant en cas d'échec Navidrome : les fichiers restent
+  // renommés, seul le statut push le reflète.
+  const flushPush = async () => {
+    if (pushBatch.length === 0) return;
+    autoProcessProgress.stage = 'push';
+    let res;
+    try {
+      res = await pushItemsToNavidrome(pushBatch);
+    } catch (err) {
+      res = { results: pushBatch.map(it => ({ filePath: it.filePath, success: false, error: err.message })) };
+    }
+    allPushResults.push(...(res.results || []));
+    const byName = new Map((res.results || []).map(r => [path.basename(r.filePath || r.file || ''), r]));
+    for (const entry of autoProcessProgress.recent) {
+      if (entry.newName && byName.has(entry.newName)) {
+        const r = byName.get(entry.newName);
+        entry.pushed = !!r.success;
+        entry.alreadyInLibrary = !!r.alreadyInLibrary;
+      }
+    }
+    pushBatch = [];
+  };
 
   try {
     for (const originalPath of filePaths) {
@@ -164,6 +203,31 @@ export async function autoProcessAndPush(filePaths) {
           if (genre) applyGenre(filePath, genre);
         }
 
+        // Empreinte audio (Chromaprint) — pour détecter les DOUBLONS MUSICAUX
+        // (même son, titre différent), que la détection par titre ne voit pas.
+        // Depuis le cache si dispo, sinon calculée (~1s) et mise en cache.
+        autoProcessProgress.stage = 'fingerprint';
+        let fingerprint = null;
+        if (cacheRef) {
+          const cached = getCachedAnalysis(cacheRef);
+          fingerprint = cached?.fingerprint || null;
+          if (!fingerprint) {
+            fingerprint = await getFingerprint(filePath);
+            if (fingerprint) setCachedAnalysis(cacheRef, { fingerprint });
+          }
+        }
+
+        // Ce morceau est-il un doublon musical d'un morceau déjà traité dans ce
+        // lot ? Si oui, il reprend le titre + l'artiste du canonique (au lieu d'un
+        // nom aléatoire différent) et ira en Covers uniquement (Subwave ne le
+        // rejouera pas). Comparaison par distance de Hamming sur l'empreinte.
+        let dupOf = null;
+        if (fingerprint) {
+          for (const seen of seenTracks) {
+            if (fingerprintSimilarity(fingerprint, seen.fingerprint) >= DUP_SIMILARITY) { dupOf = seen; break; }
+          }
+        }
+
         // Mood dérivé de l'AUDIO (classifieur mtg_jamendo mappé sur les SHOW_MOODS),
         // pas deviné par le LLM. Repli déterministe sur le BPM si l'audio n'a rien
         // donné d'exploitable (sinon Subwave ne piochera le morceau dans aucune
@@ -171,28 +235,36 @@ export async function autoProcessAndPush(filePaths) {
         const audioMoods = mapAudioMoods(audioMoodTags);
         const moods = audioMoods.length ? audioMoods : fallbackMood(bpm);
 
-        // Titre + artiste en UN SEUL appel LLM (le mood ne passe plus par le LLM —
-        // il vient de l'audio). On lui donne le style et les moods détectés comme
-        // contexte. Non bloquant.
-        autoProcessProgress.stage = 'metadata';
-        let meta = { title: null, author: null };
-        try {
-          meta = await generateTrackMetadata({ lyrics, bpm, key, scale, style: genre || '', moods });
-        } catch { /* Ollama down — replis ci-dessous */ }
-
-        const title = meta.title;
-        if (title) applyTitle(filePath, title);
-
-        // Artiste : réutilisé si ce nom de fichier a déjà été vu ailleurs
-        // (title-authors.js — deux versions d'un même titre → même artiste),
-        // sinon celui généré par le LLM (collant au mood + style), mémorisé
-        // AVANT le renommage sur le nom d'origine (comme /api/rename-bulk).
-        let author = findExistingAuthor([originalName]);
-        let authorReused = !!author;
-        if (!author) {
-          author = meta.author;
-          if (author) recordAuthor([originalName], author);
+        // Titre + artiste. Doublon musical → on reprend ceux du canonique, pas
+        // d'appel LLM. Sinon UN SEUL appel LLM (le mood vient de l'audio, plus du
+        // LLM) ; le style et les moods détectés lui servent de contexte.
+        let title, author, authorReused;
+        if (dupOf) {
+          title = dupOf.title;
+          author = dupOf.author;
+          authorReused = true;
+        } else {
+          autoProcessProgress.stage = 'metadata';
+          let meta = { title: null, author: null };
+          try {
+            meta = await generateTrackMetadata({ lyrics, bpm, key, scale, style: genre || '', moods });
+          } catch { /* Ollama down — replis ci-dessous */ }
+          title = meta.title;
+          // Artiste : réutilisé si ce nom de fichier a déjà été vu ailleurs
+          // (title-authors.js — deux versions d'un même titre → même artiste),
+          // sinon celui généré par le LLM, mémorisé AVANT le renommage.
+          author = findExistingAuthor([originalName]);
+          authorReused = !!author;
+          if (!author) {
+            author = meta.author;
+            if (author) recordAuthor([originalName], author);
+          }
+          // Premier exemplaire de cette empreinte → il devient le canonique.
+          if (fingerprint && title && author) {
+            seenTracks.push({ fingerprint, title, author });
+          }
         }
+        if (title) applyTitle(filePath, title);
 
         // Tags ID3 (artiste/titre/genre) puis renommage physique
         // "{artiste} - {titre}" — même schéma que /api/rename-bulk (suffixe
@@ -240,17 +312,27 @@ export async function autoProcessAndPush(filePaths) {
           }
         }
 
+        // Doublon musical → Covers uniquement (coversOnly), pas les playlists mood :
+        // Subwave ne rejouera pas deux fois le même enregistrement. Le canonique, lui,
+        // va dans ses playlists mood normalement.
         const pushMoods = genre ? [...moods, genre] : moods;
-        pushItems.push({ filePath, moods: pushMoods });
-        processed.push({ file: originalName, filePath, success: true, title, author, authorReused, genre, moods });
-        logRecent({ oldName: originalName, newName: path.basename(filePath), genre, moods, success: true, pushed: null });
+        pushBatch.push({ filePath, moods: pushMoods, coversOnly: !!dupOf });
+        processed.push({ file: originalName, filePath, success: true, title, author, authorReused, genre, moods, duplicate: !!dupOf });
+        logRecent({ oldName: originalName, newName: path.basename(filePath), genre, moods, success: true, pushed: null, duplicate: !!dupOf });
       } catch (err) {
         processed.push({ file: originalName, filePath, success: false, error: err.message });
         logRecent({ oldName: originalName, newName: null, success: false, error: err.message, pushed: false });
       } finally {
         autoProcessProgress.done++;
       }
+
+      // Push par paquets : dès que PUSH_CHUNK fichiers sont prêts, on les envoie
+      // (les entrées correspondantes du journal passent au vert), puis on continue.
+      if (pushBatch.length >= PUSH_CHUNK) await flushPush();
     }
+
+    // Dernier paquet (< PUSH_CHUNK) — les derniers fichiers passent au vert.
+    await flushPush();
 
     if (renames.length > 0) {
       actionLog.push({
@@ -263,23 +345,13 @@ export async function autoProcessAndPush(filePaths) {
       persistProject();
     }
 
-    autoProcessProgress.stage = 'push';
-    const pushResult = pushItems.length > 0
-      ? await pushItemsToNavidrome(pushItems)
-      : { success: true, pushed: 0, failed: 0, results: [] };
-
-    // Reporte le statut Navidrome (push groupé à la fin) sur les entrées encore
-    // visibles dans le journal roulant — les derniers fichiers, justement ceux
-    // que l'utilisateur voit à l'écran, obtiennent leur ✓/✗ Navidrome.
-    const byName = new Map(pushResult.results.map(r => [path.basename(r.filePath || r.file || ''), r]));
-    for (const entry of autoProcessProgress.recent) {
-      if (entry.newName && byName.has(entry.newName)) {
-        const r = byName.get(entry.newName);
-        entry.pushed = !!r.success;
-        entry.alreadyInLibrary = !!r.alreadyInLibrary;
-      }
-    }
-
+    const pushedCount = allPushResults.filter(r => r.success).length;
+    const pushResult = {
+      success: allPushResults.every(r => r.success),
+      pushed: pushedCount,
+      failed: allPushResults.length - pushedCount,
+      results: allPushResults
+    };
     return { processed, push: pushResult };
   } finally {
     // On garde `recent` intact après la fin : la fenêtre de log reste lisible

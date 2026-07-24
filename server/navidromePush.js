@@ -45,7 +45,7 @@ export async function pushItemsToNavidrome(items) {
 
     pushProgress.stage = 'push';
     const results = [];
-    for (const { filePath, moods } of items) {
+    for (const { filePath, moods, coversOnly } of items) {
       const fileName = path.basename(filePath);
       pushProgress.currentFile = fileName;
       try {
@@ -55,11 +55,19 @@ export async function pushItemsToNavidrome(items) {
           continue;
         }
 
-        // Vérifie qu'un morceau équivalent n'est pas déjà catalogué (auto-exclusion par songId)
-        const existingMatch = await findExistingCatalogMatch(filePath, { selfSongId: songId });
+        // coversOnly explicite (traitement en masse : doublon musical détecté par
+        // empreinte en amont) → Covers direct, on ne refait pas le test par titre
+        // (qui, avec un doublon renommé au MÊME titre que son canonique, matcherait
+        // à tort dans les deux sens). Si coversOnly === false, le canonique va dans
+        // ses moods sans test titre. Si undefined (flux Import legacy) → ancien
+        // comportement : test par titre findExistingCatalogMatch.
+        let existingMatch = null;
+        if (coversOnly === undefined) {
+          existingMatch = await findExistingCatalogMatch(filePath, { selfSongId: songId });
+        }
 
-        if (existingMatch) {
-          // Doublon déjà présent : mise en attente dans la playlist "Covers", pas d'ajout aux moods
+        if (coversOnly === true || existingMatch) {
+          // Doublon : mise en attente dans la playlist "Covers", pas d'ajout aux moods
           const coverResult = await ensurePlaylistAndAddSong(COVERS_PLAYLIST_NAME, songId);
           results.push({
             file: fileName,
@@ -67,7 +75,7 @@ export async function pushItemsToNavidrome(items) {
             success: true,
             songId,
             alreadyInLibrary: true,
-            matchedExisting: { title: existingMatch.title, path: existingMatch.path, similarity: existingMatch.similarity },
+            matchedExisting: existingMatch ? { title: existingMatch.title, path: existingMatch.path, similarity: existingMatch.similarity } : undefined,
             playlists: [coverResult]
           });
           continue;
