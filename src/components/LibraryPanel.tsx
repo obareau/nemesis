@@ -6,6 +6,17 @@ import { WarnIcon, CheckIcon } from '../icons';
 
 type SortKey = 'title' | 'artist' | 'genre' | 'bpm' | 'key' | 'size' | 'original';
 
+// Étapes du pipeline par fichier (miroir des autoProcessProgress.stage côté serveur,
+// autoProcess.js). 'push' est l'étape finale unique pour tout le lot, pas par fichier.
+const PIPELINE_STAGES: { key: string; label: string }[] = [
+  { key: 'analyze', label: 'BPM' },
+  { key: 'lyrics', label: 'Paroles' },
+  { key: 'genre', label: 'Style' },
+  { key: 'metadata', label: 'Titre/Mood/Artiste' },
+  { key: 'rename', label: 'Renommage' },
+  { key: 'push', label: 'Envoi' },
+];
+
 interface AutoProcessResult {
   processed: {
     file: string;
@@ -259,6 +270,19 @@ export function LibraryPanel() {
                 className={`progress-fill ${!progress?.total ? 'indeterminate' : ''}`}
                 style={progress?.total ? { width: `${Math.round((progress.done / progress.total) * 100)}%` } : undefined}
               />
+            </div>
+            <div className="stage-stepper">
+              {PIPELINE_STAGES.map(st => {
+                const curIdx = progress?.stage ? PIPELINE_STAGES.findIndex(s => s.key === progress.stage) : -1;
+                const myIdx = PIPELINE_STAGES.findIndex(s => s.key === st.key);
+                const state = curIdx === -1 ? 'idle' : myIdx < curIdx ? 'done' : myIdx === curIdx ? 'active' : 'pending';
+                return <span key={st.key} className={`stage-step stage-${state}`}>{st.label}</span>;
+              })}
+            </div>
+            <div className="import-batch-progress-label">
+              {progress?.total
+                ? `${progress.done}/${progress.total} morceaux${progress.currentFile ? ` — ${progress.currentFile}` : ''}`
+                : 'Démarrage…'}
             </div>
           </div>
         )}

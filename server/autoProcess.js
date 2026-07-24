@@ -10,7 +10,7 @@ import { readTags, writeTags } from './tagging.js';
 import { safeMoveSync } from './fsUtils.js';
 import { findExistingAuthor, recordAuthor } from './title-authors.js';
 import { recordRename } from './rename-history.js';
-import { generateTitleFromLyrics, generateTitleFromMoodStyle, generateMoodFromSignals, generateAuthorForTrack } from './ollamaGen.js';
+import { generateTrackMetadata } from './ollamaGen.js';
 import { pushItemsToNavidrome } from './navidromePush.js';
 
 // Style Discogs ("Electronic---Techno") → juste la partie style, plus lisible
@@ -130,25 +130,9 @@ export async function autoProcessAndPush(filePaths) {
           }
         }
 
-        // Mood(s) — paroles et/ou bpm/tonalité, au moins un signal requis.
-        // Calculé AVANT le titre : un instrumental (sans paroles) se titre
-        // depuis son mood + son style, donc ces deux signaux doivent être prêts.
-        // NON BLOQUANT : generateMoodFromSignals lève si Ollama renvoie un mood
-        // hors liste ou s'il n'y a aucun signal — sans ce try/catch, un simple
-        // raté de mood faisait planter TOUT le fichier (ni genre, ni renommage).
-        // Repli déterministe sur le BPM pour ne jamais laisser un morceau sans
-        // mood (sinon Subwave ne le piochera dans aucune playlist mood).
-        autoProcessProgress.stage = 'mood';
-        let moods = [];
-        try {
-          moods = await generateMoodFromSignals({ lyrics, bpm, key, scale });
-        } catch {
-          moods = fallbackMood(bpm);
-        }
-
         // Style réel (contenu audio) — Essentia/Discogs-Effnet, jamais déduit
-        // du nom de fichier ou du BPM. Non bloquant : un échec laisse juste
-        // le fichier sans genre ID3 ni playlist de style.
+        // du nom de fichier ou du BPM. Calculé AVANT le LLM pour le lui passer
+        // en signal. Non bloquant : un échec laisse juste le fichier sans genre.
         autoProcessProgress.stage = 'genre';
         let genre = null;
         let styles = null;
@@ -163,34 +147,31 @@ export async function autoProcessAndPush(filePaths) {
           if (genre) applyGenre(filePath, genre);
         }
 
-        // Titre — depuis le refrain si paroles (les lignes qui reviennent le
-        // plus), sinon depuis le mood + style pour un instrumental.
-        autoProcessProgress.stage = 'title';
-        let title = null;
+        // Titre + moods + artiste en UN SEUL appel LLM (~1,5s au lieu de ~50s
+        // en 3 appels séparés — les modèles cloud raisonnent, chaque round-trip
+        // coûtait 5-36s). Tout est non bloquant, avec replis déterministes.
+        autoProcessProgress.stage = 'metadata';
+        let meta = { title: null, moods: [], author: null };
         try {
-          if (lyrics && lyrics.trim()) {
-            title = await generateTitleFromLyrics(lyrics);
-          } else if (moods.length || genre) {
-            title = await generateTitleFromMoodStyle({ moods, style: genre || '' });
-          }
-          if (title) applyTitle(filePath, title);
-        } catch {
-          title = null; // Ollama down ou réponse invalide — le fichier garde son titre existant
-        }
+          meta = await generateTrackMetadata({ lyrics, bpm, key, scale, style: genre || '' });
+        } catch { /* Ollama down — on garde les replis ci-dessous */ }
 
-        // Artiste fictif — réutilisé si ce nom de fichier a déjà été vu
-        // ailleurs (title-authors.js), sinon généré (en collant au mood + style)
-        // et mémorisé AVANT le renommage (sur le nom d'origine, comme /api/rename-bulk).
-        autoProcessProgress.stage = 'author';
+        // Mood : repli déterministe sur le BPM si le LLM n'a rien donné de valide
+        // (sinon Subwave ne piochera le morceau dans aucune playlist mood).
+        const moods = meta.moods.length ? meta.moods : fallbackMood(bpm);
+
+        const title = meta.title;
+        if (title) applyTitle(filePath, title);
+
+        // Artiste : réutilisé si ce nom de fichier a déjà été vu ailleurs
+        // (title-authors.js — deux versions d'un même titre → même artiste),
+        // sinon celui généré par le LLM (collant au mood + style), mémorisé
+        // AVANT le renommage sur le nom d'origine (comme /api/rename-bulk).
         let author = findExistingAuthor([originalName]);
         let authorReused = !!author;
         if (!author) {
-          try {
-            author = await generateAuthorForTrack([originalName], moods.join(', '), genre || '');
-            recordAuthor([originalName], author);
-          } catch {
-            author = null; // Ollama down — pas de renommage possible sans artiste
-          }
+          author = meta.author;
+          if (author) recordAuthor([originalName], author);
         }
 
         // Tags ID3 (artiste/titre/genre) puis renommage physique

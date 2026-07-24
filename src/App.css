@@ -634,6 +634,33 @@ button, input, select {
   margin: 0;
 }
 
+.stage-stepper {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.stage-step {
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border-light);
+  color: var(--text-faint);
+  background: var(--bg-input);
+  transition: all 0.2s;
+}
+.stage-step.stage-done { color: var(--success); border-color: var(--success); opacity: 0.75; }
+.stage-step.stage-active {
+  color: var(--bg-app);
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(224, 168, 56, 0.25);
+}
+.stage-step.stage-pending { opacity: 0.5; }
+
 .library-actions {
   display: flex;
   gap: 10px;
