@@ -8,8 +8,25 @@ import { pushProgress, pushFilesToNavidrome } from '../navidromePush.js';
 import { autoProcessProgress, autoProcessAndPush } from '../autoProcess.js';
 import { getCachedAnalysis } from '../cache.js';
 import { allRenames } from '../rename-history.js';
+import { safeMoveSync } from '../fsUtils.js';
+import { datedFolderName } from './import.js';
 
 const router = express.Router();
+
+const AUDIO_RE = /\.(mp3|flac|wav|ogg)$/i;
+
+// Liste récursive des fichiers audio d'un dossier.
+function collectAudio(dir) {
+  const out = [];
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) out.push(...collectAudio(full));
+    else if (e.isFile() && AUDIO_RE.test(e.name)) out.push(full);
+  }
+  return out;
+}
 
 // API: catalogue complet Navidrome (titre/artiste/chemin réel) — permet de cibler le
 // traitement en masse (auto-push) sur TOUTE la bibliothèque déjà importée, pas
@@ -159,6 +176,70 @@ router.post('/api/navidrome/auto-push', express.json(), async (req, res) => {
       return res.status(504).json({ error: err.message });
     }
     res.status(500).json({ error: `Traitement en masse échoué : ${err.message}` });
+  }
+});
+
+// API: Traiter un DOSSIER au choix par le pipeline complet. Les fichiers hors de
+// la bibliothèque Navidrome sont d'abord déplacés dedans (dossier daté, comme
+// l'import), puis tout passe par autoProcessAndPush (analyse, style, mood, dédup,
+// titre/artiste, renommage, push). Un dossier déjà DANS la bibliothèque est traité
+// sur place, sans déplacement.
+router.post('/api/navidrome/process-folder', express.json(), async (req, res) => {
+  const { folderPath } = req.body;
+  if (!folderPath || typeof folderPath !== 'string') {
+    return res.status(400).json({ error: 'folderPath requis' });
+  }
+  if (!fs.existsSync(folderPath) || !fs.statSync(folderPath).isDirectory()) {
+    return res.status(400).json({ error: 'Dossier introuvable' });
+  }
+
+  const found = collectAudio(folderPath);
+  if (found.length === 0) {
+    return res.status(400).json({ error: 'Aucun fichier audio dans ce dossier' });
+  }
+
+  const libRoot = path.resolve(NAVIDROME_LIBRARY_ROOT);
+  const inLibrary = (p) => path.resolve(p).startsWith(libRoot + path.sep);
+
+  const filePaths = [];
+  const moved = [];
+  const moveErrors = [];
+
+  // Déplace les fichiers externes dans un dossier daté de la bibliothèque ; ceux
+  // déjà dans la bibliothèque sont traités là où ils sont.
+  const externals = found.filter(f => !inLibrary(f));
+  let destDir = null;
+  if (externals.length) {
+    destDir = path.join(NAVIDROME_LIBRARY_ROOT, datedFolderName());
+    try { fs.mkdirSync(destDir, { recursive: true }); } catch { /* déjà là */ }
+  }
+
+  for (const f of found) {
+    if (inLibrary(f)) { filePaths.push(f); continue; }
+    try {
+      const name = path.basename(f);
+      const ext = path.extname(name);
+      const base = path.basename(name, ext);
+      let finalName = name, dest = path.join(destDir, finalName), n = 2;
+      while (fs.existsSync(dest)) { finalName = `${base} (${n})${ext}`; dest = path.join(destDir, finalName); n++; }
+      safeMoveSync(f, dest);
+      moved.push(dest);
+      filePaths.push(dest);
+    } catch (err) {
+      moveErrors.push({ file: path.basename(f), error: err.message });
+    }
+  }
+
+  if (filePaths.length === 0) {
+    return res.status(500).json({ error: 'Aucun fichier traitable (échecs de déplacement)', moveErrors });
+  }
+
+  try {
+    const result = await autoProcessAndPush(filePaths);
+    res.json({ ...result, movedCount: moved.length, destDir, moveErrors });
+  } catch (err) {
+    if (err.code === 'SCAN_TIMEOUT') return res.status(504).json({ error: err.message });
+    res.status(500).json({ error: `Traitement du dossier échoué : ${err.message}` });
   }
 });
 

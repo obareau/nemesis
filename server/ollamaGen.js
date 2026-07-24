@@ -5,7 +5,11 @@ import { OLLAMA_URL, OLLAMA_MODEL, SHOW_MOODS } from './config.js';
 // file existants (/api/generate-title, /api/generate-mood) et le traitement
 // en masse (navidromePush.autoProcessAndPush) pour ne pas dupliquer le prompt
 // à deux endroits qui finiraient par diverger.
-async function ollamaJson(prompt, numPredict = 150) {
+async function ollamaJson(prompt, numPredict = 150, temperature = null) {
+  const options = { num_predict: numPredict };
+  // Température plus haute = plus de variété dans les noms (évite que le modèle
+  // ressorte toujours le même vocabulaire "Neon/Shadow/Void/Pulse"). null = défaut.
+  if (temperature != null) options.temperature = temperature;
   const response = await fetch(`${OLLAMA_URL}/api/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -14,7 +18,7 @@ async function ollamaJson(prompt, numPredict = 150) {
     // la génération : ces tâches sortent 1 ligne de JSON, inutile de laisser filer.
     body: JSON.stringify({
       model: OLLAMA_MODEL, prompt, stream: false, format: 'json',
-      think: false, options: { num_predict: numPredict }
+      think: false, options
     })
   });
   if (!response.ok) throw new Error(`Ollama a répondu ${response.status}`);
@@ -159,7 +163,14 @@ Réponds uniquement au format JSON strict : {"moods": ["...", "..."]}`;
 // peut être null si le modèle n'a pas répondu proprement (non bloquant). Le style
 // et les moods détectés sont passés en CONTEXTE pour que titre et artiste collent.
 // Le titre sort du refrain (lignes récurrentes) si paroles, sinon du mood+style.
-export async function generateTrackMetadata({ lyrics = '', bpm, key, scale, style = '', moods = [] }) {
+// Mots surexploités par le modèle sur une bibliothèque électro/sombre — on lui
+// demande explicitement de s'en écarter pour varier les noms (sinon tout devient
+// "Neon Shadow Void Circuit Pulse Drive").
+const OVERUSED_WORDS = ['neon', 'shadow', 'void', 'circuit', 'pulse', 'drive', 'ghost', 'midnight', 'reflection', 'reflections'];
+
+// avoid : noms complets déjà pris (à ne pas réutiliser). temperature : plus haute
+// = plus de variété. Utilisés par la boucle anti-collision de autoProcess.
+export async function generateTrackMetadata({ lyrics = '', bpm, key, scale, style = '', moods = [], avoid = [], temperature = null }) {
   const hasLyrics = !!lyrics.trim();
   const hooks = hasLyrics ? recurringLines(lyrics) : [];
 
@@ -176,8 +187,18 @@ export async function generateTrackMetadata({ lyrics = '', bpm, key, scale, styl
     ? `un titre de chanson de 2 à 4 mots tiré du REFRAIN (les lignes qui reviennent), pas un résumé`
     : `un titre de 2 à 4 mots qui colle à l'ambiance et au style (morceau instrumental, sans paroles)`;
 
+  // Contraintes de diversité : éviter le vocabulaire cliché + les noms déjà pris.
+  const diversity = [
+    `IMPÉRATIF DE VARIÉTÉ : sois original. ÉVITE absolument ces mots surexploités : ${OVERUSED_WORDS.join(', ')}. Puise ailleurs (nature, mythologie, mécanique, argot, langues variées, abstractions).`
+  ];
+  if (avoid.length) {
+    diversity.push(`Ces noms "artiste - titre" sont DÉJÀ PRIS, n'en produis AUCUN d'approchant : ${avoid.slice(0, 30).join(' | ')}.`);
+  }
+
   const prompt = `Tu prépares les métadonnées d'un morceau pour une radio IA underground.
 ${parts.join('\n')}
+
+${diversity.join('\n')}
 
 Donne, en JSON strict et rien d'autre :
 - "title" : ${titleRule}. Sans ponctuation ni guillemets.
@@ -185,7 +206,7 @@ Donne, en JSON strict et rien d'autre :
 
 {"title": "...", "author": "..."}`;
 
-  const data = await ollamaJson(prompt, 120);
+  const data = await ollamaJson(prompt, 120, temperature);
   let parsed;
   try {
     parsed = parseModelJson(data.response);

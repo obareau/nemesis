@@ -13,6 +13,7 @@ import { findExistingAuthor, recordAuthor } from './title-authors.js';
 import { recordRename } from './rename-history.js';
 import { generateTrackMetadata } from './ollamaGen.js';
 import { pushItemsToNavidrome } from './navidromePush.js';
+import { NAVIDROME_LIBRARY_ROOT } from './config.js';
 
 // Style Discogs ("Electronic---Techno") → juste la partie style, plus lisible
 // comme genre ID3/nom de playlist qu'un couple genre---style complet.
@@ -31,6 +32,40 @@ function fallbackMood(bpm) {
   if (bpm >= 100) return ['driving'];
   if (bpm >= 76) return ['reflective'];
   return ['calm'];
+}
+
+// Clé de nom normalisée pour détecter les collisions "artiste - titre" — casse,
+// espaces, ponctuation et suffixe (N) ignorés, comme le renommage.
+function nameKey(author, title) {
+  const s = `${author || ''} - ${title || ''}`.toLowerCase()
+    .replace(/\s*\(\d+\)\s*$/, '')
+    .replace(/[^\p{L}\p{N}\s]/gu, '')
+    .replace(/\s+/g, ' ').trim();
+  return s;
+}
+
+// Ensemble des noms "artiste - titre" DÉJÀ présents dans la bibliothèque (depuis
+// les noms de fichier sur disque), pour que la génération évite de recréer un nom
+// déjà pris (le LLM, sans mémoire, ressort sans cesse le même vocabulaire → plein
+// de morceaux différents finissaient avec le même nom). Reconstruit à chaque run.
+function buildUsedNames() {
+  const used = new Set();
+  const walk = (dir) => {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walk(full);
+      else if (e.isFile() && /\.(mp3|flac|wav|ogg)$/i.test(e.name)) {
+        const base = e.name.replace(/\.[^.]+$/, '');
+        const m = base.match(/^(.*?) - (.*)$/); // "Artiste - Titre"
+        if (m) used.add(nameKey(m[1], m[2]));
+        else used.add(nameKey('', base));
+      }
+    }
+  };
+  walk(NAVIDROME_LIBRARY_ROOT);
+  return used;
 }
 
 // Progression du traitement en masse — même pattern que pushProgress (un seul
@@ -81,6 +116,10 @@ export async function autoProcessAndPush(filePaths) {
   // reprend son titre + artiste et part en Covers (Subwave ne le rejouera pas).
   const seenTracks = []; // [{ fingerprint, title, author }]
   const DUP_SIMILARITY = 92; // seuil Hamming (identique à la dédup Curation)
+  // Noms "artiste - titre" déjà pris (bibliothèque actuelle + ceux générés dans ce
+  // run) → anti-collision : deux morceaux DIFFÉRENTS ne doivent pas hériter du même
+  // nom juste parce que le LLM ressort le même vocabulaire.
+  const usedNames = buildUsedNames();
 
   // Pousse le paquet courant vers Navidrome, met à jour le statut des entrées
   // encore visibles dans le journal roulant (elles passent au vert), puis vide
@@ -245,20 +284,37 @@ export async function autoProcessAndPush(filePaths) {
           authorReused = true;
         } else {
           autoProcessProgress.stage = 'metadata';
+          // Artiste réutilisé si ce nom de fichier d'origine a déjà été vu ailleurs
+          // (title-authors.js — deux versions d'un même titre → même artiste).
+          const reusedAuthor = findExistingAuthor([originalName]);
+          authorReused = !!reusedAuthor;
+
+          // Génération avec ANTI-COLLISION : si le "artiste - titre" produit est
+          // déjà pris (par la bibliothèque ou un fichier déjà traité dans ce run),
+          // on régénère en donnant au LLM les noms à éviter + plus de température.
+          // Jusqu'à 4 tentatives, puis on laisse le suffixe (N) trancher.
           let meta = { title: null, author: null };
-          try {
-            meta = await generateTrackMetadata({ lyrics, bpm, key, scale, style: genre || '', moods });
-          } catch { /* Ollama down — replis ci-dessous */ }
-          title = meta.title;
-          // Artiste : réutilisé si ce nom de fichier a déjà été vu ailleurs
-          // (title-authors.js — deux versions d'un même titre → même artiste),
-          // sinon celui généré par le LLM, mémorisé AVANT le renommage.
-          author = findExistingAuthor([originalName]);
-          authorReused = !!author;
-          if (!author) {
-            author = meta.author;
-            if (author) recordAuthor([originalName], author);
+          const avoid = [];
+          for (let attempt = 0; attempt < 4; attempt++) {
+            try {
+              meta = await generateTrackMetadata({
+                lyrics, bpm, key, scale, style: genre || '', moods,
+                avoid, temperature: attempt === 0 ? 0.8 : 1.1
+              });
+            } catch { break; /* Ollama down — replis ci-dessous */ }
+            const candAuthor = reusedAuthor || meta.author;
+            if (!meta.title || !candAuthor) break; // rien à vérifier
+            const k = nameKey(candAuthor, meta.title);
+            if (!usedNames.has(k)) break; // nom libre → on le garde
+            avoid.push(`${candAuthor} - ${meta.title}`); // collision → régénère en l'évitant
           }
+
+          title = meta.title;
+          author = reusedAuthor || meta.author;
+          if (!authorReused && author) recordAuthor([originalName], author);
+
+          // Réserve le nom pour que les fichiers suivants du run ne le reprennent pas.
+          if (author && title) usedNames.add(nameKey(author, title));
           // Premier exemplaire de cette empreinte → il devient le canonique.
           if (fingerprint && title && author) {
             seenTracks.push({ fingerprint, title, author });

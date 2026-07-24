@@ -13,11 +13,13 @@ interface BrowserModalProps {
   onLoadPath: (path: string) => void;
   onClose: () => void;
   onConfirmScan: (path: string) => void;
+  confirmLabel?: string;
 }
 
 export function BrowserModal({
   pathInput, browseError, shortcuts, browsePath, browseParent, browseDirs,
-  onPathInputChange, onSubmit, onLoadPath, onClose, onConfirmScan
+  onPathInputChange, onSubmit, onLoadPath, onClose, onConfirmScan,
+  confirmLabel = 'Scanner ce dossier'
 }: BrowserModalProps) {
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -90,7 +92,7 @@ export function BrowserModal({
             Annuler
           </button>
           <button className="modal-btn" onClick={() => onConfirmScan(browsePath)}>
-            Scanner ce dossier
+            {confirmLabel}
           </button>
         </div>
       </div>

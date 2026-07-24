@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import * as api from '../api';
-import type { NavidromeSong } from '../api';
+import type { NavidromeSong, Shortcut } from '../api';
 import { moodColor } from '../moods';
 import { WarnIcon, CheckIcon } from '../icons';
+import { BrowserModal } from './BrowserModal';
 
 type SortKey = 'title' | 'artist' | 'genre' | 'bpm' | 'key' | 'size' | 'original';
 
@@ -63,6 +64,14 @@ export function LibraryPanel() {
   const [resultError, setResultError] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  // Navigateur de dossiers (pour "Traiter un dossier")
+  const [showBrowser, setShowBrowser] = useState(false);
+  const [pathInput, setPathInput] = useState('/home/olivier');
+  const [browsePath, setBrowsePath] = useState('/home/olivier');
+  const [browseParent, setBrowseParent] = useState<string | null>(null);
+  const [browseDirs, setBrowseDirs] = useState<string[]>([]);
+  const [browseError, setBrowseError] = useState<string | null>(null);
+  const [shortcuts, setShortcuts] = useState<Shortcut[]>([]);
 
   const loadLibrary = useCallback(async () => {
     setLoading(true);
@@ -130,10 +139,11 @@ export function LibraryPanel() {
     );
   };
 
-  const process = async (explicitTargets?: string[]) => {
-    const targets = explicitTargets ?? [...selected];
-    if (targets.length === 0 || processing) return;
-
+  // Runner partagé : setup + polling de la progression (stepper + journal) + teardown.
+  // `run` fait l'appel réseau qui déclenche le traitement côté serveur et renvoie la
+  // réponse fetch. Utilisé par le traitement d'une sélection ET d'un dossier.
+  const runProcessing = async (run: () => Promise<Response>, onDone?: () => void) => {
+    if (processing) return;
     setProcessing(true);
     setResult(null);
     setResultError(null);
@@ -143,22 +153,18 @@ export function LibraryPanel() {
         const res = await api.getAutoPushProgress();
         const data = await res.json();
         setProgress(data.active ? data : null);
-        // Le journal roulant vient du backend (recent) — on le garde à jour même
-        // après la fin du batch, pour que la fenêtre de log reste lisible.
         if (Array.isArray(data.recent)) setLog(data.recent);
       } catch { /* sondage best-effort */ }
     }, 400);
 
     try {
-      const res = await api.autoPushBatch(targets);
+      const res = await run();
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Échec traitement en masse');
+      if (!res.ok) throw new Error(data.error || 'Échec du traitement');
       setResult(data);
-      setSelected(new Set());
-      // Volontairement PAS de loadLibrary() ici : recharger 1000+ lignes en plein
-      // écran est brutal. La fenêtre de log dit ce qui a été fait ; l'utilisateur
-      // clique "Rafraîchir" quand il veut réactualiser la liste complète.
-      // Dernier état du journal (statuts Navidrome inclus) après le push final.
+      onDone?.();
+      // Pas de loadLibrary() auto (recharger 1000+ lignes est brutal). Dernier état
+      // du journal (statuts Navidrome inclus) après le push final.
       try {
         const p = await (await api.getAutoPushProgress()).json();
         if (Array.isArray(p.recent)) setLog(p.recent);
@@ -170,6 +176,42 @@ export function LibraryPanel() {
       setProgress(null);
       setProcessing(false);
     }
+  };
+
+  const process = async (explicitTargets?: string[]) => {
+    const targets = explicitTargets ?? [...selected];
+    if (targets.length === 0 || processing) return;
+    await runProcessing(() => api.autoPushBatch(targets), () => setSelected(new Set()));
+  };
+
+  const processFolderPath = async (folderPath: string) => {
+    setShowBrowser(false);
+    await runProcessing(() => api.processFolder(folderPath));
+  };
+
+  const loadBrowsePath = async (targetPath: string) => {
+    try {
+      const res = await api.browse(targetPath);
+      const data = await res.json();
+      if (!res.ok) { setBrowseError(data.error || 'Chemin invalide'); return; }
+      setBrowseError(null);
+      setBrowsePath(data.currentPath);
+      setPathInput(data.currentPath);
+      setBrowseParent(data.parent);
+      setBrowseDirs(data.dirs);
+    } catch (err) {
+      setBrowseError(String(err));
+    }
+  };
+
+  const openBrowser = async () => {
+    setShowBrowser(true);
+    loadBrowsePath(browsePath);
+    try {
+      const res = await api.browseShortcuts();
+      const data = await res.json();
+      setShortcuts(data.shortcuts || []);
+    } catch { setShortcuts([]); }
   };
 
   const failures = result?.processed.filter(p => !p.success) || [];
@@ -287,6 +329,14 @@ export function LibraryPanel() {
           >
             {processing ? '…' : `Traiter TOUTE la bibliothèque (${songs.length})`}
           </button>
+          <button
+            className="import-send-btn library-folder-btn"
+            onClick={openBrowser}
+            disabled={processing}
+            title="Choisir un dossier de MP3 (n'importe où) et lui appliquer tout le pipeline. Les fichiers hors bibliothèque sont d'abord déplacés dedans."
+          >
+            📁 Traiter un dossier…
+          </button>
         </div>
 
         {processing && (
@@ -364,6 +414,23 @@ export function LibraryPanel() {
           </div>
         )}
       </div>
+
+      {showBrowser && (
+        <BrowserModal
+          pathInput={pathInput}
+          browseError={browseError}
+          shortcuts={shortcuts}
+          browsePath={browsePath}
+          browseParent={browseParent}
+          browseDirs={browseDirs}
+          onPathInputChange={setPathInput}
+          onSubmit={(e) => { e.preventDefault(); loadBrowsePath(pathInput); }}
+          onLoadPath={loadBrowsePath}
+          onClose={() => setShowBrowser(false)}
+          onConfirmScan={processFolderPath}
+          confirmLabel="Traiter ce dossier"
+        />
+      )}
     </div>
   );
 }

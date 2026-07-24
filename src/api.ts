@@ -239,6 +239,12 @@ export function getAutoPushProgress() {
   return fetch(`${API}/navidrome/auto-push-progress`);
 }
 
+// Traite un DOSSIER au choix par le pipeline complet (déplace dans la bibliothèque
+// si externe, puis analyse/style/mood/dédup/renommage/push).
+export function processFolder(folderPath: string) {
+  return postJson('/navidrome/process-folder', { folderPath });
+}
+
 export function getImportInbox() {
   return fetch(`${API}/import/inbox`);
 }
