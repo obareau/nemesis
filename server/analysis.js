@@ -310,12 +310,12 @@ export function analyzeAudioFeatures(filePath) {
   });
 }
 
-// Style réel (contenu audio, pas le nom de fichier/BPM) via le classifieur Discogs-Effnet
-// (400 classes genre---style). analyze_genre.py n'analyse qu'un extrait central (~90s)
-// au lieu du morceau entier — l'EffNet parcourt chaque seconde d'audio, donc borner
-// l'extrait borne le coût sans changer le style dominant détecté. Résout null en cas
-// d'échec (signal optionnel, non bloquant).
-export function analyzeGenre(filePath, topN = 3) {
+// Analyse audio du contenu (style + mood) via l'embedding Discogs-Effnet — deux têtes
+// sur le même embedding. analyze_genre.py n'analyse qu'un extrait central (~90s) au
+// lieu du morceau entier (l'EffNet parcourt chaque seconde, borner l'extrait borne le
+// coût sans changer le style/mood dominant). Résout { styles, moods } ou null en cas
+// d'échec (signal optionnel, non bloquant). styles/moods = [{ label, score }].
+export function analyzeAudioContent(filePath) {
   return new Promise((resolve) => {
     let proc;
     try {
@@ -323,7 +323,7 @@ export function analyzeGenre(filePath, topN = 3) {
       // CUDA voué à échouer (système en CUDA 13, TF réclame CUDA 11) et son spam
       // d'erreurs, et surtout toute contention VRAM avec Iris. Le GPU n'apportait
       // qu'un gain marginal ici (cf. essais) pour un vrai risque de crash bureau.
-      proc = spawn(ESSENTIA_TF_PYTHON, [ANALYZE_GENRE_SCRIPT, filePath, String(topN)], {
+      proc = spawn(ESSENTIA_TF_PYTHON, [ANALYZE_GENRE_SCRIPT, filePath], {
         env: { ...process.env, CUDA_VISIBLE_DEVICES: '' }
       });
     } catch {
@@ -349,7 +349,7 @@ export function analyzeGenre(filePath, topN = 3) {
       try {
         const parsed = JSON.parse(output.trim().split('\n').pop());
         if (parsed.error || !Array.isArray(parsed.styles) || parsed.styles.length === 0) { resolve(null); return; }
-        resolve(parsed.styles);
+        resolve({ styles: parsed.styles, moods: Array.isArray(parsed.moods) ? parsed.moods : [] });
       } catch {
         resolve(null);
       }

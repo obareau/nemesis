@@ -53,8 +53,11 @@ router.get('/api/navidrome/library', async (req, res) => {
         try {
           const stat = fs.statSync(s.path);
           const cached = getCachedAnalysis({ path: s.path, size: stat.size, mtime: stat.mtimeMs });
-          const genre = Array.isArray(cached?.genre) && cached.genre[0]?.label
-            ? cached.genre[0].label.split('---').pop()
+          // cached.genre : soit { styles, moods } (nouveau), soit un tableau de styles
+          // nu (ancien format en cache) — on gère les deux.
+          const styleArr = Array.isArray(cached?.genre) ? cached.genre : cached?.genre?.styles;
+          const genre = Array.isArray(styleArr) && styleArr[0]?.label
+            ? styleArr[0].label.split('---').pop()
             : null;
           return { ...s, currentName, originalName, playlists, bpm: cached?.bpm ?? null, key: cached?.key ?? null, scale: cached?.scale ?? null, genre };
         } catch {

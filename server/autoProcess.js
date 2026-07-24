@@ -5,7 +5,8 @@ import {
   actionLog, persistProject
 } from './store.js';
 import { getCachedAnalysis, setCachedAnalysis } from './cache.js';
-import { analyzeAudioFeatures, transcribeLyrics, analyzeGenre } from './analysis.js';
+import { analyzeAudioFeatures, transcribeLyrics, analyzeAudioContent } from './analysis.js';
+import { mapAudioMoods } from './moodMap.js';
 import { readTags, writeTags } from './tagging.js';
 import { safeMoveSync } from './fsUtils.js';
 import { findExistingAuthor, recordAuthor } from './title-authors.js';
@@ -140,34 +141,44 @@ export async function autoProcessAndPush(filePaths) {
         }
 
         // Style réel (contenu audio) — Essentia/Discogs-Effnet, jamais déduit
-        // du nom de fichier ou du BPM. Calculé AVANT le LLM pour le lui passer
-        // en signal. Non bloquant : un échec laisse juste le fichier sans genre.
+        // du nom de fichier ou du BPM. Deux têtes (style + mood) sur le MÊME
+        // embedding, calculé une fois. Non bloquant : un échec laisse le fichier
+        // sans style et retombe sur le mood BPM.
         autoProcessProgress.stage = 'genre';
         let genre = null;
         let styles = null;
+        let audioMoodTags = [];
         if (cacheRef) {
           const cached = getCachedAnalysis(cacheRef);
-          styles = cached?.genre || null;
-          if (!styles) {
-            styles = await analyzeGenre(filePath);
-            if (styles) setCachedAnalysis(cacheRef, { genre: styles });
+          // Le cache 'genre' contient soit { styles, moods } (nouveau), soit un
+          // tableau de styles nu (ancien format) — on normalise les deux.
+          let audio = cached?.genre || null;
+          if (audio && Array.isArray(audio)) audio = { styles: audio, moods: [] };
+          if (!audio || !audio.styles) {
+            audio = await analyzeAudioContent(filePath);
+            if (audio) setCachedAnalysis(cacheRef, { genre: audio });
           }
+          styles = audio?.styles || null;
+          audioMoodTags = audio?.moods || [];
           genre = shortGenreLabel(styles?.[0]);
           if (genre) applyGenre(filePath, genre);
         }
 
-        // Titre + moods + artiste en UN SEUL appel LLM (~1,5s au lieu de ~50s
-        // en 3 appels séparés — les modèles cloud raisonnent, chaque round-trip
-        // coûtait 5-36s). Tout est non bloquant, avec replis déterministes.
-        autoProcessProgress.stage = 'metadata';
-        let meta = { title: null, moods: [], author: null };
-        try {
-          meta = await generateTrackMetadata({ lyrics, bpm, key, scale, style: genre || '' });
-        } catch { /* Ollama down — on garde les replis ci-dessous */ }
+        // Mood dérivé de l'AUDIO (classifieur mtg_jamendo mappé sur les SHOW_MOODS),
+        // pas deviné par le LLM. Repli déterministe sur le BPM si l'audio n'a rien
+        // donné d'exploitable (sinon Subwave ne piochera le morceau dans aucune
+        // playlist mood).
+        const audioMoods = mapAudioMoods(audioMoodTags);
+        const moods = audioMoods.length ? audioMoods : fallbackMood(bpm);
 
-        // Mood : repli déterministe sur le BPM si le LLM n'a rien donné de valide
-        // (sinon Subwave ne piochera le morceau dans aucune playlist mood).
-        const moods = meta.moods.length ? meta.moods : fallbackMood(bpm);
+        // Titre + artiste en UN SEUL appel LLM (le mood ne passe plus par le LLM —
+        // il vient de l'audio). On lui donne le style et les moods détectés comme
+        // contexte. Non bloquant.
+        autoProcessProgress.stage = 'metadata';
+        let meta = { title: null, author: null };
+        try {
+          meta = await generateTrackMetadata({ lyrics, bpm, key, scale, style: genre || '', moods });
+        } catch { /* Ollama down — replis ci-dessous */ }
 
         const title = meta.title;
         if (title) applyTitle(filePath, title);
@@ -221,7 +232,7 @@ export async function autoProcessAndPush(filePaths) {
               const newStat = fs.statSync(newPath);
               setCachedAnalysis(
                 { path: newPath, size: newStat.size, mtime: newStat.mtimeMs },
-                { bpm, key, scale, genre: styles, lyrics: lyrics || null }
+                { bpm, key, scale, genre: { styles, moods: audioMoodTags }, lyrics: lyrics || null }
               );
             } catch { /* pas bloquant — juste un cache de confort */ }
 

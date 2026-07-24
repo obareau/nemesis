@@ -154,13 +154,12 @@ Réponds uniquement au format JSON strict : {"moods": ["...", "..."]}`;
   return validMoods;
 }
 
-// Un SEUL appel LLM pour titre + moods + artiste — remplace les 3 appels séparés
-// du traitement en masse. ~50s → ~1,5s/fichier (les modèles cloud raisonnent et
-// chaque round-trip coûtait 5-36s). Renvoie { title, moods, author } ; chaque
-// champ peut être null/[] si le modèle n'a pas répondu proprement (non bloquant,
-// l'appelant a ses propres replis). Style détecté et BPM passés en signaux ;
-// le titre sort du refrain (lignes récurrentes) si paroles, sinon du mood+style.
-export async function generateTrackMetadata({ lyrics = '', bpm, key, scale, style = '' }) {
+// Un SEUL appel LLM pour titre + artiste (le mood ne passe PLUS par le LLM — il
+// est dérivé de l'audio, cf. moodMap.js). Renvoie { title, author } ; chaque champ
+// peut être null si le modèle n'a pas répondu proprement (non bloquant). Le style
+// et les moods détectés sont passés en CONTEXTE pour que titre et artiste collent.
+// Le titre sort du refrain (lignes récurrentes) si paroles, sinon du mood+style.
+export async function generateTrackMetadata({ lyrics = '', bpm, key, scale, style = '', moods = [] }) {
   const hasLyrics = !!lyrics.trim();
   const hooks = hasLyrics ? recurringLines(lyrics) : [];
 
@@ -171,35 +170,30 @@ export async function generateTrackMetadata({ lyrics = '', bpm, key, scale, styl
   }
   if (bpm) parts.push(`BPM : ${bpm}${key ? ` · Tonalité : ${key}${scale === 'minor' ? 'm' : ''}` : ''}`);
   if (style) parts.push(`Style musical détecté : ${style}`);
+  if (moods.length) parts.push(`Ambiance détectée : ${moods.join(', ')}`);
 
   const titleRule = hasLyrics
     ? `un titre de chanson de 2 à 4 mots tiré du REFRAIN (les lignes qui reviennent), pas un résumé`
-    : `un titre de 2 à 4 mots qui colle au mood et au style (morceau instrumental, sans paroles)`;
+    : `un titre de 2 à 4 mots qui colle à l'ambiance et au style (morceau instrumental, sans paroles)`;
 
   const prompt = `Tu prépares les métadonnées d'un morceau pour une radio IA underground.
 ${parts.join('\n')}
 
 Donne, en JSON strict et rien d'autre :
 - "title" : ${titleRule}. Sans ponctuation ni guillemets.
-- "moods" : 1 à 3 ambiances EXCLUSIVEMENT parmi cette liste (mots exacts, minuscules) : ${SHOW_MOODS.join(', ')}
-- "author" : UN nom d'artiste fictif, créatif et mystérieux (1 à 4 mots), qui colle au mood et au style.
+- "author" : UN nom d'artiste fictif, créatif et mystérieux (1 à 4 mots), qui colle à l'ambiance et au style.
 
-{"title": "...", "moods": ["..."], "author": "..."}`;
+{"title": "...", "author": "..."}`;
 
-  const data = await ollamaJson(prompt, 200);
+  const data = await ollamaJson(prompt, 120);
   let parsed;
   try {
     parsed = parseModelJson(data.response);
   } catch {
-    return { title: null, moods: [], author: null };
+    return { title: null, author: null };
   }
 
   const title = typeof parsed.title === 'string' && parsed.title.trim() ? parsed.title.trim() : null;
   const author = typeof parsed.author === 'string' && parsed.author.trim() ? parsed.author.trim() : null;
-  const rawMoods = Array.isArray(parsed.moods) ? parsed.moods : [];
-  const moods = SHOW_MOODS.filter(m =>
-    rawMoods.some(r => typeof r === 'string' && r.trim().toLowerCase() === m)
-  ).slice(0, 3);
-
-  return { title, moods, author };
+  return { title, author };
 }
